@@ -19,9 +19,9 @@ echo "Done"
 
 # ##################################### BOOST #####################################
 
-BOOST_VERSION=1.81.0
-BOOST_NAME=boost_1_81_0.tar.gz
-BOOST_URL=https://boostorg.jfrog.io/artifactory/main/release/$BOOST_VERSION/source/$BOOST_NAME
+BOOST_VERSION=1.72.0
+BOOST_NAME=boost_1_72_0.tar.gz
+BOOST_URL=https://sourceforge.net/projects/boost/files/boost/$BOOST_VERSION/$BOOST_NAME/download
 
 echo "Downloading "$BOOST_NAME
 wget -nc -q --show-progress -O libraries/downloads/$BOOST_NAME $BOOST_URL
@@ -79,7 +79,7 @@ echo "Done"
 
 
 ##################################### mpfr #####################################
-MPFR_VERSION=4.2.0
+MPFR_VERSION=4.2.2
 MPFR_NAME=mpfr-$MPFR_VERSION.tar.xz
 MPFR_URL=https://www.mpfr.org/mpfr-current/$MPFR_NAME
 

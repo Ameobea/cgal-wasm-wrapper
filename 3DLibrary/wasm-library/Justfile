@@ -1,0 +1,19 @@
+patch-deps:
+  #!/bin/bash
+
+  cp iterator.h_PATCHED ./libraries/CGAL-5.5.2/include/CGAL/boost/graph/iterator.h
+  sed -i 's/template traversal_with_priority_and_group_traversal/traversal_with_priority_and_group_traversal/g' ./libraries/CGAL-5.5.2/include/CGAL/AABB_tree.h
+
+build:
+  #!/bin/bash
+
+  just patch-deps
+
+  bash build.sh gener
+  if ! tail -n 5 ./build/index.js | grep -q "export { CGAL }"; then
+    echo "export { CGAL }" >> ./build/index.js
+  fi
+  wasm-opt build/index.wasm -g -O4 --enable-simd --enable-nontrapping-float-to-int --precompute-propagate --detect-features --strip-dwarf -c -o build/index.wasm --enable-bulk-memory --enable-nontrapping-float-to-int
+
+install:
+  cp build/index.* ~/dream/src/viz/wasm/cgal/
