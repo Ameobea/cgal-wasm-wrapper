@@ -1,4 +1,5 @@
 #define CGAL_EIGEN3_ENABLED
+#define CGAL_ALWAYS_ROUND_TO_NEAREST
 
 #include <CGAL/Dimension.h>
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
@@ -31,15 +32,16 @@
 #include <CGAL/mesh_segmentation.h>
 #include <CGAL/property_map.h>
 
-typedef CGAL::Simple_cartesian<double> Kernel;
+// typedef CGAL::Simple_cartesian<double> Kernel;
+// /\ using this kernel causes precision issues and all kinds of bugs.
+// it needs the exact predicates kernel \/ to work properly.
+typedef CGAL::Exact_predicates_inexact_constructions_kernel Kernel;
 typedef CGAL::Surface_mesh<Kernel::Point_3> SurfaceMesh;
 
-// Helper function to get vector data pointer
 template <typename T> intptr_t getVecDataPtr(std::vector<T> &vec) {
   return reinterpret_cast<intptr_t>(vec.data());
 }
 
-// Template function to register vector types for emscripten
 template <typename T>
 emscripten::class_<std::vector<T>> register_vector_custom(const char *name) {
   typedef std::vector<T> VecType;
@@ -57,16 +59,15 @@ class PolyMesh {
 private:
   std::vector<double> vertices;
   std::vector<int> faces;
-  // SurfaceMesh triangulatedMesh;
+
 public:
   SurfaceMesh mesh;
   Kernel::Point_3 sdf_p = Kernel::Point_3(0, 4, 0);
-  PolyMesh() { std::cout << "created mesh" << std::endl; }
+  PolyMesh() {}
 
-  // Create mesh from raw vertex positions and indices
+  // TODO: should check to see if there's a native CGAL function for this
   void buildFromBuffers(const std::vector<float> &vertices,
                         const std::vector<uint32_t> &indices) {
-    // Clear existing mesh
     mesh.clear();
 
     if (vertices.size() % 3 != 0) {
@@ -83,10 +84,6 @@ public:
       return;
     }
 
-    std::cout << "Building mesh from " << (vertices.size() / 3)
-              << " vertices and " << (indices.size() / 3) << " faces"
-              << std::endl;
-
     std::vector<SurfaceMesh::vertex_index> vertex_indices;
     vertex_indices.reserve(vertices.size() / 3);
 
@@ -102,31 +99,19 @@ public:
       uint32_t i1 = indices[i + 1];
       uint32_t i2 = indices[i + 2];
 
-      if (i0 >= vertex_indices.size() || i1 >= vertex_indices.size() ||
-          i2 >= vertex_indices.size()) {
-        std::cout << "Warning: Invalid index in face " << (i / 3)
-                  << " (indices: " << i0 << ", " << i1 << ", " << i2
-                  << ", max: " << (vertex_indices.size() - 1) << ")"
-                  << std::endl;
-        continue;
-      }
-
+      // TODO: crazy that we're allocating a vector each iteration here
       std::vector<SurfaceMesh::vertex_index> face_verts = {
           vertex_indices[i0], vertex_indices[i1], vertex_indices[i2]};
 
       mesh.add_face(face_verts);
     }
-
-    std::cout << "Mesh built successfully with " << mesh.number_of_vertices()
-              << " vertices and " << mesh.number_of_faces() << " faces"
-              << std::endl;
   }
 
-  // CGAL::SM_Vertex_index
   int addVertex(double x, double y, double z) {
     auto v0 = mesh.add_vertex(Kernel::Point_3(x, y, z));
     return v0.idx();
   }
+
   int addFace(emscripten::val vertices) {
     std::vector<SurfaceMesh::vertex_index> faceVerts;
     for (int i = 0; i < vertices["length"].as<int>(); i++) {
@@ -135,33 +120,38 @@ public:
     auto fc = mesh.add_face(faceVerts);
     return fc.idx();
   }
+
   void triangulate(SurfaceMesh &targetMesh) {
     CGAL::Polygon_mesh_processing::triangulate_faces(targetMesh);
   }
-  void catmull_smooth() {
-    CGAL::Subdivision_method_3::CatmullClark_subdivision(mesh, 1);
-  }
-  void loop_smooth() { CGAL::Subdivision_method_3::Loop_subdivision(mesh, 1); }
-  void dooSabin_smooth() {
-    CGAL::Subdivision_method_3::DooSabin_subdivision(mesh, 1);
-  }
-  void sqrt_smooth() { CGAL::Subdivision_method_3::Sqrt3_subdivision(mesh, 1); }
-  void decimate(double stop_ratio) {
-    namespace SMS = CGAL::Surface_mesh_simplification;
-    std::cout << "decimate stop ratio" << stop_ratio << std::endl;
-    SMS::Count_ratio_stop_predicate<SurfaceMesh> stop(stop_ratio);
-    int r = SMS::edge_collapse(mesh, stop);
-    std::cout << "\nFinished!\n"
-              << r << " edges removed.\n"
-              << mesh.number_of_edges() << " final edges.\n";
+
+  void catmull_smooth(int iterations) {
+    CGAL::Subdivision_method_3::CatmullClark_subdivision(mesh, iterations);
   }
 
-  emscripten::val getIndices() {
-    std::vector<int> indices;
+  void loop_smooth(int iterations) {
+    CGAL::Subdivision_method_3::Loop_subdivision(mesh, iterations);
+  }
+
+  void dooSabin_smooth(int iterations) {
+    CGAL::Subdivision_method_3::DooSabin_subdivision(mesh, iterations);
+  }
+
+  void sqrt_smooth(int iterations) {
+    CGAL::Subdivision_method_3::Sqrt3_subdivision(mesh, iterations);
+  }
+
+  void decimate(double stop_ratio) {
+    namespace SMS = CGAL::Surface_mesh_simplification;
+    SMS::Count_ratio_stop_predicate<SurfaceMesh> stop(stop_ratio);
+    int r = SMS::edge_collapse(mesh, stop);
+  }
+
+  std::vector<uint32_t> getIndices() {
+    std::vector<uint32_t> indices;
     SurfaceMesh triangulatedMesh = mesh;
     if (!this->isTriangulated(mesh)) {
-      std::cout << "non-triangular mesh, triangulating..." << std::endl;
-      this->triangulate(triangulatedMesh); // triangulate first
+      this->triangulate(triangulatedMesh);
     }
 
     for (auto faceIt = triangulatedMesh.faces_begin();
@@ -172,36 +162,43 @@ public:
       auto vertexIt = triangulatedMesh.target(halfedgeIt);
       auto vertexIt2 = triangulatedMesh.target(halfedgeIt2);
       auto vertexIt3 = triangulatedMesh.target(halfedgeIt3);
-      indices.push_back(vertexIt.idx());
-      indices.push_back(vertexIt2.idx());
-      indices.push_back(vertexIt3.idx());
+      indices.push_back(static_cast<uint32_t>(vertexIt.idx()));
+      indices.push_back(static_cast<uint32_t>(vertexIt2.idx()));
+      indices.push_back(static_cast<uint32_t>(vertexIt3.idx()));
     }
     triangulatedMesh.clear();
     triangulatedMesh.collect_garbage();
-    return emscripten::val(
-        emscripten::typed_memory_view(indices.size(), indices.data()));
+    return indices;
   }
 
   bool isTriangulated(const SurfaceMesh &mesh) {
     for (const auto &f : mesh.faces()) {
       if (mesh.degree(f) != 3) {
-        return false; // Face does not have 3 vertices, not triangulated
+        return false;
       }
     }
     return true;
   }
 
-  emscripten::val getVertices() {
-    std::vector<double> vertices;
+  std::vector<float> getVertices() {
+    std::vector<float> vertices;
+    SurfaceMesh triangulatedMesh = mesh;
+    if (!this->isTriangulated(mesh)) {
+      this->triangulate(triangulatedMesh);
+    }
+
     for (auto vertexIt = mesh.vertices_begin(); vertexIt != mesh.vertices_end();
          ++vertexIt) {
       auto point = mesh.point(*vertexIt);
-      vertices.push_back(point.x());
-      vertices.push_back(point.y());
-      vertices.push_back(point.z());
+      vertices.push_back(static_cast<float>(point.x()));
+      vertices.push_back(static_cast<float>(point.y()));
+      vertices.push_back(static_cast<float>(point.z()));
     }
-    return emscripten::val(
-        emscripten::typed_memory_view(vertices.size(), vertices.data()));
+
+    triangulatedMesh.clear();
+    triangulatedMesh.collect_garbage();
+
+    return vertices;
   }
 
   emscripten::val segment(int n_clusters, double sm_lambda) {
@@ -219,7 +216,6 @@ public:
     // compute SDF values
     // We can't use default parameters for number of rays, and cone angle
     // and the postprocessing
-    std::cout << "before sdf values" << std::endl;
     CGAL::sdf_values(mesh, sdf_property_map, 2.0 / 3.0 * CGAL_PI, 25, true);
     // create a property-map for segment-ids
     typedef SurfaceMesh::Property_map<face_descriptor, std::size_t>
@@ -236,25 +232,19 @@ public:
 
     std::size_t number_of_segments;
     if (n_clusters == 0 && sm_lambda == 0) {
-      std::cout << "using default parameters" << std::endl;
       number_of_segments = CGAL::segmentation_from_sdf_values(
           mesh, sdf_property_map, segment_property_map);
     } else {
-      std::cout << "using custom parameters" << std::endl;
       number_of_segments = CGAL::segmentation_from_sdf_values(
           mesh, sdf_property_map, segment_property_map, number_of_clusters,
           smoothing_lambda);
     }
-    std::cout << "sdf values" << std::endl;
-    std::cout << "Number of segments: " << number_of_segments << std::endl;
     // get face descriptor os surfacemesh
     std::vector<int> segments;
     for (auto faceIt = mesh.faces_begin(); faceIt != mesh.faces_end();
          ++faceIt) {
-      std::cout << segment_property_map[*faceIt] << " ";
       segments.push_back(segment_property_map[*faceIt]);
     }
-    std::cout << std::endl;
     return emscripten::val(
         emscripten::typed_memory_view(segments.size(), segments.data()));
   }
@@ -263,8 +253,6 @@ public:
     namespace PMP = CGAL::Polygon_mesh_processing;
 
     if (mesh.is_empty()) {
-      std::cout << "Warning: Cannot perform alpha wrap on empty mesh"
-                << std::endl;
       return PolyMesh();
     }
 
@@ -274,19 +262,13 @@ public:
                   CGAL::square(bbox.ymax() - bbox.ymin()) +
                   CGAL::square(bbox.zmax() - bbox.zmin()));
 
-    const double alpha = diag_length / relative_alpha;
-    const double offset = diag_length / relative_offset;
-
-    std::cout << "Alpha wrap parameters - alpha: " << alpha
-              << ", offset: " << offset << std::endl;
+    const double alpha = diag_length * relative_alpha;
+    const double offset = diag_length * relative_offset;
 
     PolyMesh result;
 
     try {
       CGAL::alpha_wrap_3(mesh, alpha, offset, result.mesh);
-      std::cout << "Alpha wrap completed. Result: "
-                << result.mesh.number_of_vertices() << " vertices, "
-                << result.mesh.number_of_faces() << " faces" << std::endl;
     } catch (const std::exception &e) {
       std::cout << "Error during alpha wrapping: " << e.what() << std::endl;
     }
@@ -317,30 +299,20 @@ PolyMesh alphaWrapPointCloud(const std::vector<float> &vertices,
   }
 
   if (points.empty()) {
-    std::cout << "Error: Empty point cloud" << std::endl;
     return PolyMesh();
   }
-
-  std::cout << "Processing point cloud with " << points.size() << " points"
-            << std::endl;
 
   CGAL::Bbox_3 bbox = CGAL::bbox_3(std::cbegin(points), std::cend(points));
   const double diag_length = std::sqrt(CGAL::square(bbox.xmax() - bbox.xmin()) +
                                        CGAL::square(bbox.ymax() - bbox.ymin()) +
                                        CGAL::square(bbox.zmax() - bbox.zmin()));
-  const double alpha = diag_length / relative_alpha;
-  const double offset = diag_length / relative_offset;
-
-  std::cout << "Alpha wrap parameters - alpha: " << alpha
-            << ", offset: " << offset << std::endl;
+  const double alpha = diag_length * relative_alpha;
+  const double offset = diag_length * relative_offset;
 
   PolyMesh result;
 
   try {
     CGAL::alpha_wrap_3(points, alpha, offset, result.mesh);
-    std::cout << "Point cloud alpha wrap completed. Result: "
-              << result.mesh.number_of_vertices() << " vertices, "
-              << result.mesh.number_of_faces() << " faces" << std::endl;
   } catch (const std::exception &e) {
     std::cout << "Error during point cloud alpha wrapping: " << e.what()
               << std::endl;
@@ -350,7 +322,6 @@ PolyMesh alphaWrapPointCloud(const std::vector<float> &vertices,
 }
 
 EMSCRIPTEN_BINDINGS(my_module) {
-  // Register vector types
   register_vector_custom<float>("vector<float>");
   register_vector_custom<uint32_t>("vector<uint32_t>");
 

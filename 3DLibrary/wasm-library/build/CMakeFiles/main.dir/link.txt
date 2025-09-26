@@ -1,1 +1,1 @@
-/home/casey/emsdk/upstream/emscripten/em++ -O3 -DNDEBUG -s ALLOW_MEMORY_GROWTH=1 -profiling -flto --bind -s EXPORT_NAME="CGAL" -s MODULARIZE=1 --cpu-baseline=avx -s NO_EXIT_RUNTIME=1 -s NO_FILESYSTEM=1 @CMakeFiles/main.dir/objects1.rsp -o index.js @CMakeFiles/main.dir/linkLibs.rsp
+/home/casey/emsdk/upstream/emscripten/em++ -O3 -DNDEBUG -fwasm-exceptions -O3 -s ALLOW_MEMORY_GROWTH=1 -profiling -flto --bind -s EXPORT_NAME="CGAL" -s MODULARIZE=1 -s NO_EXIT_RUNTIME=1 -s NO_FILESYSTEM=1 @CMakeFiles/main.dir/objects1.rsp -o index.js @CMakeFiles/main.dir/linkLibs.rsp

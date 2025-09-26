@@ -13,7 +13,7 @@ build:
   if ! tail -n 5 ./build/index.js | grep -q "export { CGAL }"; then
     echo "export { CGAL }" >> ./build/index.js
   fi
-  wasm-opt build/index.wasm -g -O4 --enable-simd --enable-nontrapping-float-to-int --precompute-propagate --detect-features --strip-dwarf -c -o build/index.wasm --enable-bulk-memory --enable-nontrapping-float-to-int
+  wasm-opt build/index.wasm -g -O4 --enable-exception-handling --enable-bulk-memory --enable-nontrapping-float-to-int --detect-features --strip-dwarf -c -o build/index.wasm
 
 install:
   cp build/index.* ~/dream/src/viz/wasm/cgal/

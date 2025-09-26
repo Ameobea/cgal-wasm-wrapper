@@ -19,6 +19,7 @@
     "ranges": "cpp",
     "span": "cpp",
     "utility": "cpp",
-    "format": "cpp"
+    "format": "cpp",
+    "ostream": "cpp"
   }
 }

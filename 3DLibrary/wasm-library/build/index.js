@@ -269,7 +269,7 @@ function preRun() {
 
 function initRuntime() {
   runtimeInitialized = true;
-  wasmExports["J"]();
+  wasmExports["I"]();
 }
 
 function postRun() {
@@ -330,6 +330,17 @@ function removeRunDependency(id) {
   // definition for WebAssembly.RuntimeError claims it takes no arguments even
   // though it can.
   // TODO(https://github.com/google/closure-compiler/pull/3913): Remove if/when upstream closure gets fixed.
+  // See above, in the meantime, we resort to wasm code for trapping.
+  // In case abort() is called before the module is initialized, wasmExports
+  // and its exported '__trap' function is not available, in which case we throw
+  // a RuntimeError.
+  // We trap instead of throwing RuntimeError to prevent infinite-looping in
+  // Wasm EH code (because RuntimeError is considered as a foreign exception and
+  // caught by 'catch_all'), but in case throwing RuntimeError is fine because
+  // the module has not even been instantiated, even less running.
+  if (runtimeInitialized) {
+    ___trap();
+  }
   /** @suppress {checkTypes} */ var e = new WebAssembly.RuntimeError(what);
   readyPromiseReject(e);
   // Throw the error whether or not MODULARIZE is set because abort is used
@@ -411,9 +422,9 @@ async function createWasm() {
   // performing other necessary setup
   /** @param {WebAssembly.Module=} module*/ function receiveInstance(instance, module) {
     wasmExports = instance.exports;
-    wasmMemory = wasmExports["I"];
+    wasmMemory = wasmExports["H"];
     updateMemoryViews();
-    wasmTable = wasmExports["L"];
+    wasmTable = wasmExports["K"];
     removeRunDependency("wasm-instantiate");
     return wasmExports;
   }
@@ -480,65 +491,6 @@ var onPreRuns = [];
 var addOnPreRun = cb => onPreRuns.unshift(cb);
 
 var noExitRuntime = Module["noExitRuntime"] || true;
-
-class ExceptionInfo {
-  // excPtr - Thrown object pointer to wrap. Metadata pointer is calculated from it.
-  constructor(excPtr) {
-    this.excPtr = excPtr;
-    this.ptr = excPtr - 24;
-  }
-  set_type(type) {
-    HEAPU32[(((this.ptr) + (4)) >> 2)] = type;
-  }
-  get_type() {
-    return HEAPU32[(((this.ptr) + (4)) >> 2)];
-  }
-  set_destructor(destructor) {
-    HEAPU32[(((this.ptr) + (8)) >> 2)] = destructor;
-  }
-  get_destructor() {
-    return HEAPU32[(((this.ptr) + (8)) >> 2)];
-  }
-  set_caught(caught) {
-    caught = caught ? 1 : 0;
-    HEAP8[(this.ptr) + (12)] = caught;
-  }
-  get_caught() {
-    return HEAP8[(this.ptr) + (12)] != 0;
-  }
-  set_rethrown(rethrown) {
-    rethrown = rethrown ? 1 : 0;
-    HEAP8[(this.ptr) + (13)] = rethrown;
-  }
-  get_rethrown() {
-    return HEAP8[(this.ptr) + (13)] != 0;
-  }
-  // Initialize native structure fields. Should be called once after allocated.
-  init(type, destructor) {
-    this.set_adjusted_ptr(0);
-    this.set_type(type);
-    this.set_destructor(destructor);
-  }
-  set_adjusted_ptr(adjustedPtr) {
-    HEAPU32[(((this.ptr) + (16)) >> 2)] = adjustedPtr;
-  }
-  get_adjusted_ptr() {
-    return HEAPU32[(((this.ptr) + (16)) >> 2)];
-  }
-}
-
-var exceptionLast = 0;
-
-var uncaughtExceptionCount = 0;
-
-var ___cxa_throw = (ptr, type, destructor) => {
-  var info = new ExceptionInfo(ptr);
-  // Initialize ExceptionInfo content after it was allocated in __cxa_allocate_exception.
-  info.init(type, destructor);
-  exceptionLast = ptr;
-  uncaughtExceptionCount++;
-  throw exceptionLast;
-};
 
 var __abort_js = () => abort("");
 
@@ -2562,53 +2514,54 @@ init_emval();
 
 // End JS library code
 var wasmImports = {
-  /** @export */ c: ___cxa_throw,
-  /** @export */ A: __abort_js,
-  /** @export */ o: __embind_register_bigint,
-  /** @export */ z: __embind_register_bool,
-  /** @export */ j: __embind_register_class,
-  /** @export */ i: __embind_register_class_constructor,
+  /** @export */ z: __abort_js,
+  /** @export */ n: __embind_register_bigint,
+  /** @export */ y: __embind_register_bool,
+  /** @export */ h: __embind_register_class,
+  /** @export */ g: __embind_register_class_constructor,
   /** @export */ b: __embind_register_class_function,
-  /** @export */ y: __embind_register_emval,
-  /** @export */ n: __embind_register_float,
-  /** @export */ x: __embind_register_function,
-  /** @export */ d: __embind_register_integer,
+  /** @export */ x: __embind_register_emval,
+  /** @export */ m: __embind_register_float,
+  /** @export */ w: __embind_register_function,
+  /** @export */ c: __embind_register_integer,
   /** @export */ a: __embind_register_memory_view,
-  /** @export */ w: __embind_register_std_string,
-  /** @export */ h: __embind_register_std_wstring,
-  /** @export */ v: __embind_register_void,
-  /** @export */ u: __emscripten_runtime_keepalive_clear,
-  /** @export */ m: __emval_as,
-  /** @export */ e: __emval_decref,
-  /** @export */ l: __emval_get_property,
-  /** @export */ t: __emval_new_cstring,
-  /** @export */ k: __emval_run_destructors,
-  /** @export */ f: __emval_take_value,
-  /** @export */ s: __setitimer_js,
-  /** @export */ r: __tzset_js,
-  /** @export */ q: _emscripten_date_now,
-  /** @export */ p: _emscripten_resize_heap,
-  /** @export */ H: _environ_get,
-  /** @export */ G: _environ_sizes_get,
-  /** @export */ g: _exit,
-  /** @export */ F: _fd_close,
-  /** @export */ E: _fd_read,
-  /** @export */ D: _fd_seek,
-  /** @export */ C: _fd_write,
-  /** @export */ B: _proc_exit
+  /** @export */ v: __embind_register_std_string,
+  /** @export */ f: __embind_register_std_wstring,
+  /** @export */ u: __embind_register_void,
+  /** @export */ t: __emscripten_runtime_keepalive_clear,
+  /** @export */ l: __emval_as,
+  /** @export */ d: __emval_decref,
+  /** @export */ k: __emval_get_property,
+  /** @export */ s: __emval_new_cstring,
+  /** @export */ j: __emval_run_destructors,
+  /** @export */ i: __emval_take_value,
+  /** @export */ r: __setitimer_js,
+  /** @export */ q: __tzset_js,
+  /** @export */ p: _emscripten_date_now,
+  /** @export */ o: _emscripten_resize_heap,
+  /** @export */ G: _environ_get,
+  /** @export */ F: _environ_sizes_get,
+  /** @export */ e: _exit,
+  /** @export */ E: _fd_close,
+  /** @export */ D: _fd_read,
+  /** @export */ C: _fd_seek,
+  /** @export */ B: _fd_write,
+  /** @export */ A: _proc_exit
 };
 
 var wasmExports = await createWasm();
 
-var ___wasm_call_ctors = wasmExports["J"];
+var ___wasm_call_ctors = wasmExports["I"];
 
-var ___getTypeName = wasmExports["K"];
+var ___getTypeName = wasmExports["J"];
 
-var __emscripten_timeout = wasmExports["M"];
+var __emscripten_timeout = wasmExports["L"];
 
-var _malloc = wasmExports["N"];
+var _malloc = wasmExports["M"];
 
-var _free = wasmExports["O"];
+var _free = wasmExports["N"];
+
+var ___trap = wasmExports["O"];
 
 // include: postamble.js
 // === Auto-generated postamble setup entry stuff ===

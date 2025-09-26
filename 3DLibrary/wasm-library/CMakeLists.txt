@@ -7,13 +7,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 project( cgalTest )
 
+add_compile_definitions(CGAL_ALWAYS_ROUND_TO_NEAREST)
+
 
 # Include cgal and boost headers
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libraries/CGAL-5.5.2/include)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libraries/boost_1_72_0)
 # include libigl
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libraries/libigl-2.4.0/include)
-# # include gmp
+# include gmp
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libraries/gmp-6.2.1)
 
 set(CGAL_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/libraries/CGAL-5.5.2/include)
@@ -24,6 +26,7 @@ set(LIBIGL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libraries/libigl-2.4.0/include)
 
 include_directories(${LIBIGL_DIR})
 link_directories(${CMAKE_CURRENT_SOURCE_DIR}/libraries/boost_1_72_0/stage/lib)
+link_directories(${CMAKE_CURRENT_SOURCE_DIR}/libraries/prefix/lib)
 
 add_executable(main main.cpp)
 
@@ -42,10 +45,9 @@ include_directories(${MPFR_INCLUDE_DIR})
 # find_library(GMP_LIBRARIES gmp PATHS ${GMP_INCLUDE_DIR})
 # find_library(GMPXX_LIBRARIES gmpxx PATHS ${GMP_INCLUDE_DIR})
 # find_library(MPFR_LIBRARIES mpfr PATHS ${MPFR_INCLUDE_DIR})
-# target_link_libraries(app ${EIGEN3_LIBRARIES} ${GMP_LIBRARIES})
+# target_link_libraries(main ${EIGEN3_LIBRARIES} ${GMP_LIBRARIES})
 
 # target_link_libraries(main gmp gmpxx mpfr)
-target_link_libraries(main ${GMPXX_INCLUDE_DIR} ${MPFR_INCLUDE_DIR})
 # include xatlas
 # SET(xatlas ${CMAKE_CURRENT_SOURCE_DIR}/libraries/xatlas/source/xatlas)
 # include_directories(${xatlas})
@@ -56,7 +58,8 @@ add_definitions(-w)
 set_target_properties(main
 PROPERTIES OUTPUT_NAME "index"
 CFLAGS "-O3"
-LINK_FLAGS "-s ALLOW_MEMORY_GROWTH=1 -profiling -flto --bind -s EXPORT_NAME=\"CGAL\" -s MODULARIZE=1 --cpu-baseline=avx -s NO_EXIT_RUNTIME=1 -s NO_FILESYSTEM=1"
+CXXFLAGS "-O3"
+# -fwasm-exceptions -sASSERTIONS -sNO_DISABLE_EXCEPTION_CATCHING
+LINK_FLAGS "-fwasm-exceptions -O3 -s ALLOW_MEMORY_GROWTH=1 -profiling -flto --bind -s EXPORT_NAME=\"CGAL\" -s MODULARIZE=1 -s NO_EXIT_RUNTIME=1 -s NO_FILESYSTEM=1"
 )
-
-
+target_compile_options(main PRIVATE -fwasm-exceptions)
