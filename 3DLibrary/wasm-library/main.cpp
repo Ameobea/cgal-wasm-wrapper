@@ -1,5 +1,8 @@
 #define CGAL_EIGEN3_ENABLED
 #define CGAL_ALWAYS_ROUND_TO_NEAREST
+#define __wasm__
+#define __SSE2__
+#define __SSE4_1__
 
 #include <CGAL/Dimension.h>
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>

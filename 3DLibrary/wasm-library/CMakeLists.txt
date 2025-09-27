@@ -57,9 +57,9 @@ add_definitions(-w)
 
 set_target_properties(main
 PROPERTIES OUTPUT_NAME "index"
-CFLAGS "-O3"
-CXXFLAGS "-O3"
+CFLAGS "-O3 -msimd128 -mrelaxed-simd --llvm-features=+simd128 -msse4.2"
+CXXFLAGS "-O3 -msimd128 -mrelaxed-simd --llvm-features=+simd128 -msse4.2"
 # -fwasm-exceptions -sASSERTIONS -sNO_DISABLE_EXCEPTION_CATCHING
-LINK_FLAGS "-fwasm-exceptions -O3 -s ALLOW_MEMORY_GROWTH=1 -profiling -flto --bind -s EXPORT_NAME=\"CGAL\" -s MODULARIZE=1 -s NO_EXIT_RUNTIME=1 -s NO_FILESYSTEM=1"
+LINK_FLAGS "-fwasm-exceptions -O3 -msimd128 -mrelaxed-simd --llvm-features=+simd128 -msse4.2 -s ALLOW_MEMORY_GROWTH=1 -profiling -flto --bind -s EXPORT_NAME=\"CGAL\" -s MODULARIZE=1 -s NO_EXIT_RUNTIME=1 -s NO_FILESYSTEM=1"
 )
-target_compile_options(main PRIVATE -fwasm-exceptions)
+target_compile_options(main PRIVATE -fwasm-exceptions -O3 -msimd128 -mrelaxed-simd -llvm-features=+simd128 -msse4.2)

@@ -3,6 +3,8 @@ patch-deps:
 
   cp iterator.h_PATCHED ./libraries/CGAL-5.5.2/include/CGAL/boost/graph/iterator.h
   sed -i 's/template traversal_with_priority_and_group_traversal/traversal_with_priority_and_group_traversal/g' ./libraries/CGAL-5.5.2/include/CGAL/AABB_tree.h
+  sed -i 's/ifdef CGAL_HAS_SSE2/if defined(CGAL_HAS_SSE2) \&\& !defined(__wasm__)/g' ./libraries/CGAL-5.5.2/include/CGAL/FPU.h
+  sed -i 's|  #include <mmintrin.h>|  // #include <mmintrin.h>|g' ./libraries/eigen-3.3.9/Eigen/Core
 
 build:
   #!/bin/bash
@@ -13,7 +15,7 @@ build:
   if ! tail -n 5 ./build/index.js | grep -q "export { CGAL }"; then
     echo "export { CGAL }" >> ./build/index.js
   fi
-  wasm-opt build/index.wasm -g -O4 --enable-exception-handling --enable-bulk-memory --enable-nontrapping-float-to-int --detect-features --strip-dwarf -c -o build/index.wasm
+  wasm-opt build/index.wasm -g -c -O4 --enable-exception-handling --enable-bulk-memory --enable-simd --enable-relaxed-simd --enable-nontrapping-float-to-int --precompute-propagate --strip-dwarf -o build/index.wasm
 
 install:
   cp build/index.* ~/dream/src/viz/wasm/cgal/

@@ -1,3 +1,0 @@
-/home/casey/cgal-wasm/3DLibrary/wasm-library/build/CMakeFiles/main.dir
-/home/casey/cgal-wasm/3DLibrary/wasm-library/build/CMakeFiles/edit_cache.dir
-/home/casey/cgal-wasm/3DLibrary/wasm-library/build/CMakeFiles/rebuild_cache.dir
