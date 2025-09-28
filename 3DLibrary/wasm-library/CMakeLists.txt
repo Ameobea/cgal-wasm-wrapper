@@ -11,14 +11,14 @@ add_compile_definitions(CGAL_ALWAYS_ROUND_TO_NEAREST)
 
 
 # Include cgal and boost headers
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libraries/CGAL-5.5.2/include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libraries/CGAL-5.6.3/include)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libraries/boost_1_72_0)
 # include libigl
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libraries/libigl-2.4.0/include)
 # include gmp
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libraries/gmp-6.2.1)
 
-set(CGAL_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/libraries/CGAL-5.5.2/include)
+set(CGAL_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/libraries/CGAL-5.6.3/include)
 set(BOOST_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/libraries/boost_1_72_0)
 
 set(LIBIGL_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/libraries/libigl-2.4.0/include)

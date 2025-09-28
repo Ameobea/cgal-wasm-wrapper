@@ -6,8 +6,8 @@ mkdir -p libraries/downloads
 
 # ##################################### CGAL #####################################
 
-CGAL_VERSION=5.5.2
-CGAL_NAME=CGAL-5.5.2.tar.xz
+CGAL_VERSION=5.6.3
+CGAL_NAME=CGAL-5.6.3.tar.xz
 CGAL_URL=https://github.com/CGAL/cgal/releases/download/v$CGAL_VERSION/$CGAL_NAME
 
 echo "Downloading "$CGAL_NAME

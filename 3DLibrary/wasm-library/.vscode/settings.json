@@ -1,0 +1,10 @@
+{
+  "files.associations": {
+    "*.jsx": "javascript",
+    "*.hbs": "html",
+    "deque": "cpp",
+    "string": "cpp",
+    "vector": "cpp",
+    "rope": "cpp"
+  }
+}

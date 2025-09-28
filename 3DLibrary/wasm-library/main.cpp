@@ -1,13 +1,22 @@
 #define CGAL_EIGEN3_ENABLED
 #define CGAL_ALWAYS_ROUND_TO_NEAREST
-#define __wasm__
-#define __SSE2__
-#define __SSE4_1__
+// #define __wasm__
+// #define __SSE2__
+// #define __SSE4_1__
 
 #include <CGAL/Dimension.h>
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
+#include <CGAL/Polygon_mesh_processing/IO/polygon_mesh_io.h>
 #include <CGAL/Polygon_mesh_processing/bbox.h>
+#include <CGAL/Polygon_mesh_processing/connected_components.h>
+#include <CGAL/Polygon_mesh_processing/detect_features.h>
 #include <CGAL/Polygon_mesh_processing/measure.h>
+#include <CGAL/Polygon_mesh_processing/orientation.h>
+#include <CGAL/Polygon_mesh_processing/region_growing.h>
+#include <CGAL/Polygon_mesh_processing/remesh.h>
+#include <CGAL/Polygon_mesh_processing/remesh_planar_patches.h>
+#include <CGAL/Polygon_mesh_processing/repair.h>
+#include <CGAL/Polygon_mesh_processing/surface_Delaunay_remeshing.h>
 #include <CGAL/Polygon_mesh_processing/triangulate_faces.h>
 #include <CGAL/Simple_cartesian.h>
 #include <CGAL/Surface_mesh.h>
@@ -21,6 +30,7 @@
 #include <CGAL/Triangulation_3.h>
 #include <CGAL/alpha_wrap_3.h>
 #include <CGAL/boost/graph/graph_traits_Surface_mesh.h>
+#include <CGAL/boost/graph/properties.h>
 #include <CGAL/subdivision_method_3.h>
 #include <boost/foreach.hpp>
 #include <emscripten.h>
@@ -34,6 +44,9 @@
 #include <CGAL/Polyhedron_3.h>
 #include <CGAL/mesh_segmentation.h>
 #include <CGAL/property_map.h>
+
+namespace PMP = CGAL::Polygon_mesh_processing;
+namespace SMS = CGAL::Surface_mesh_simplification;
 
 // typedef CGAL::Simple_cartesian<double> Kernel;
 // /\ using this kernel causes precision issues and all kinds of bugs.
@@ -62,6 +75,51 @@ class PolyMesh {
 private:
   std::vector<double> vertices;
   std::vector<int> faces;
+
+  using edge_descriptor = boost::graph_traits<SurfaceMesh>::edge_descriptor;
+  using face_descriptor = boost::graph_traits<SurfaceMesh>::face_descriptor;
+  using vertex_descriptor = boost::graph_traits<SurfaceMesh>::vertex_descriptor;
+
+  // Reusable constrained edge map (persist across calls so remeshing can reuse
+  // it)
+  SurfaceMesh::Property_map<edge_descriptor, bool> constrained_emap;
+  bool constrained_edge_map_initialized = false;
+
+  void ensure_constrained_map() {
+    if (!constrained_edge_map_initialized) {
+      constrained_emap = mesh.add_property_map<edge_descriptor, bool>(
+                                 "e:is_constrained", false)
+                             .first;
+      constrained_edge_map_initialized = true;
+    }
+  }
+
+  // Mark borders as constrained
+  void tag_borders() {
+    ensure_constrained_map();
+    for (auto e : edges(mesh)) {
+      if (is_border(e, mesh)) {
+        constrained_emap[e] = true;
+      }
+    }
+  }
+
+  void tag_edges(bool protect_borders, bool auto_sharp_edges,
+                 double sharp_angle_threshold_degrees) {
+    ensure_constrained_map();
+    for (auto e : edges(mesh)) {
+      constrained_emap[e] = false;
+    }
+
+    if (protect_borders) {
+      tag_borders();
+    }
+
+    if (auto_sharp_edges) {
+      PMP::detect_sharp_edges(mesh, sharp_angle_threshold_degrees,
+                              constrained_emap);
+    }
+  }
 
 public:
   SurfaceMesh mesh;
@@ -106,27 +164,17 @@ public:
       std::vector<SurfaceMesh::vertex_index> face_verts = {
           vertex_indices[i0], vertex_indices[i1], vertex_indices[i2]};
 
-      mesh.add_face(face_verts);
+      auto f = mesh.add_face(face_verts);
+      if (f == SurfaceMesh::null_face()) {
+        throw std::runtime_error(
+            "Error: Failed to add face to mesh. The input indices may "
+            "contain duplicates or refer to non-existent vertices, incorrect "
+            "winding order, or other issues.");
+      }
     }
   }
 
-  int addVertex(double x, double y, double z) {
-    auto v0 = mesh.add_vertex(Kernel::Point_3(x, y, z));
-    return v0.idx();
-  }
-
-  int addFace(emscripten::val vertices) {
-    std::vector<SurfaceMesh::vertex_index> faceVerts;
-    for (int i = 0; i < vertices["length"].as<int>(); i++) {
-      faceVerts.push_back(mesh.vertices().begin()[vertices[i].as<int>()]);
-    }
-    auto fc = mesh.add_face(faceVerts);
-    return fc.idx();
-  }
-
-  void triangulate(SurfaceMesh &targetMesh) {
-    CGAL::Polygon_mesh_processing::triangulate_faces(targetMesh);
-  }
+  void triangulate_in_place() { PMP::triangulate_faces(mesh); }
 
   void catmull_smooth(int iterations) {
     CGAL::Subdivision_method_3::CatmullClark_subdivision(mesh, iterations);
@@ -144,36 +192,6 @@ public:
     CGAL::Subdivision_method_3::Sqrt3_subdivision(mesh, iterations);
   }
 
-  void decimate(double stop_ratio) {
-    namespace SMS = CGAL::Surface_mesh_simplification;
-    SMS::Count_ratio_stop_predicate<SurfaceMesh> stop(stop_ratio);
-    int r = SMS::edge_collapse(mesh, stop);
-  }
-
-  std::vector<uint32_t> getIndices() {
-    std::vector<uint32_t> indices;
-    SurfaceMesh triangulatedMesh = mesh;
-    if (!this->isTriangulated(mesh)) {
-      this->triangulate(triangulatedMesh);
-    }
-
-    for (auto faceIt = triangulatedMesh.faces_begin();
-         faceIt != triangulatedMesh.faces_end(); ++faceIt) {
-      auto halfedgeIt = triangulatedMesh.halfedge(*faceIt);
-      auto halfedgeIt2 = triangulatedMesh.next(halfedgeIt);
-      auto halfedgeIt3 = triangulatedMesh.next(halfedgeIt2);
-      auto vertexIt = triangulatedMesh.target(halfedgeIt);
-      auto vertexIt2 = triangulatedMesh.target(halfedgeIt2);
-      auto vertexIt3 = triangulatedMesh.target(halfedgeIt3);
-      indices.push_back(static_cast<uint32_t>(vertexIt.idx()));
-      indices.push_back(static_cast<uint32_t>(vertexIt2.idx()));
-      indices.push_back(static_cast<uint32_t>(vertexIt3.idx()));
-    }
-    triangulatedMesh.clear();
-    triangulatedMesh.collect_garbage();
-    return indices;
-  }
-
   bool isTriangulated(const SurfaceMesh &mesh) {
     for (const auto &f : mesh.faces()) {
       if (mesh.degree(f) != 3) {
@@ -183,12 +201,34 @@ public:
     return true;
   }
 
+  void maybeTriangulate() {
+    if (!isTriangulated(mesh)) {
+      triangulate_in_place();
+    }
+    mesh.collect_garbage();
+  }
+
+  std::vector<uint32_t> getIndices() {
+    std::vector<uint32_t> indices;
+
+    for (auto faceIt = mesh.faces_begin(); faceIt != mesh.faces_end();
+         ++faceIt) {
+      auto halfedgeIt = mesh.halfedge(*faceIt);
+      auto halfedgeIt2 = mesh.next(halfedgeIt);
+      auto halfedgeIt3 = mesh.next(halfedgeIt2);
+      auto vertexIt = mesh.target(halfedgeIt);
+      auto vertexIt2 = mesh.target(halfedgeIt2);
+      auto vertexIt3 = mesh.target(halfedgeIt3);
+      indices.push_back(static_cast<uint32_t>(vertexIt.idx()));
+      indices.push_back(static_cast<uint32_t>(vertexIt2.idx()));
+      indices.push_back(static_cast<uint32_t>(vertexIt3.idx()));
+    }
+
+    return indices;
+  }
+
   std::vector<float> getVertices() {
     std::vector<float> vertices;
-    SurfaceMesh triangulatedMesh = mesh;
-    if (!this->isTriangulated(mesh)) {
-      this->triangulate(triangulatedMesh);
-    }
 
     for (auto vertexIt = mesh.vertices_begin(); vertexIt != mesh.vertices_end();
          ++vertexIt) {
@@ -198,63 +238,10 @@ public:
       vertices.push_back(static_cast<float>(point.z()));
     }
 
-    triangulatedMesh.clear();
-    triangulatedMesh.collect_garbage();
-
     return vertices;
   }
 
-  emscripten::val segment(int n_clusters, double sm_lambda) {
-    typedef CGAL::Exact_predicates_inexact_constructions_kernel Kernel;
-
-    typedef boost::graph_traits<SurfaceMesh>::vertex_descriptor
-        vertex_descriptor;
-    typedef boost::graph_traits<SurfaceMesh>::face_descriptor face_descriptor;
-
-    // create a property-map
-    typedef SurfaceMesh::Property_map<face_descriptor, double> Facet_double_map;
-    Facet_double_map sdf_property_map;
-    sdf_property_map =
-        mesh.add_property_map<face_descriptor, double>("f:sdf").first;
-    // compute SDF values
-    // We can't use default parameters for number of rays, and cone angle
-    // and the postprocessing
-    CGAL::sdf_values(mesh, sdf_property_map, 2.0 / 3.0 * CGAL_PI, 25, true);
-    // create a property-map for segment-ids
-    typedef SurfaceMesh::Property_map<face_descriptor, std::size_t>
-        Facet_int_map;
-    Facet_int_map segment_property_map =
-        mesh.add_property_map<face_descriptor, std::size_t>("f:sid").first;
-    ;
-
-    const std::size_t number_of_clusters =
-        n_clusters; // use 4 clusters in soft clustering
-    const double smoothing_lambda =
-        sm_lambda; // importance of surface features, suggested to be in-between
-                   // [0,1]
-
-    std::size_t number_of_segments;
-    if (n_clusters == 0 && sm_lambda == 0) {
-      number_of_segments = CGAL::segmentation_from_sdf_values(
-          mesh, sdf_property_map, segment_property_map);
-    } else {
-      number_of_segments = CGAL::segmentation_from_sdf_values(
-          mesh, sdf_property_map, segment_property_map, number_of_clusters,
-          smoothing_lambda);
-    }
-    // get face descriptor os surfacemesh
-    std::vector<int> segments;
-    for (auto faceIt = mesh.faces_begin(); faceIt != mesh.faces_end();
-         ++faceIt) {
-      segments.push_back(segment_property_map[*faceIt]);
-    }
-    return emscripten::val(
-        emscripten::typed_memory_view(segments.size(), segments.data()));
-  }
-
   PolyMesh alphaWrap(double relative_alpha, double relative_offset) {
-    namespace PMP = CGAL::Polygon_mesh_processing;
-
     if (mesh.is_empty()) {
       return PolyMesh();
     }
@@ -277,6 +264,92 @@ public:
     }
 
     return result;
+  }
+
+  void remesh_planar_patches(double max_angle_deg, double max_offset) {
+    if (mesh.is_empty()) {
+      return;
+    }
+
+    std::vector<std::size_t> region_ids(num_faces(mesh));
+    // corner status of vertices
+    std::vector<std::size_t> corner_id_map(num_vertices(mesh), -1);
+    // mark edges at the boundary of regions
+    std::vector<bool> ecm(num_edges(mesh), false);
+    // normal of the supporting planes of the regions detected
+    boost::vector_property_map<CGAL::Epick::Vector_3> normal_map;
+
+    auto max_angle_rads = max_angle_deg * CGAL_PI / 180.0;
+    auto cos_max_angle = std::cos(max_angle_rads);
+
+    // detect planar regions in the mesh
+    std::size_t nb_regions = PMP::region_growing_of_planes_on_faces(
+        mesh, CGAL::make_random_access_property_map(region_ids),
+        CGAL::parameters::cosine_of_maximum_angle(cos_max_angle)
+            .region_primitive_map(normal_map)
+            .maximum_distance(max_offset));
+
+    // detect corner vertices on the boundary of planar regions
+    std::size_t nb_corners = PMP::detect_corners_of_regions(
+        mesh, CGAL::make_random_access_property_map(region_ids), nb_regions,
+        CGAL::make_random_access_property_map(corner_id_map),
+        CGAL::parameters::cosine_of_maximum_angle(cos_max_angle)
+            .maximum_distance(max_offset)
+            .edge_is_constrained_map(
+                CGAL::make_random_access_property_map(ecm)));
+
+    // run the remeshing algorithm using filled properties
+    SurfaceMesh out;
+    PMP::remesh_almost_planar_patches(
+        mesh, out, nb_regions, nb_corners,
+        CGAL::make_random_access_property_map(region_ids),
+        CGAL::make_random_access_property_map(corner_id_map),
+        CGAL::make_random_access_property_map(ecm),
+        CGAL::parameters::patch_normal_map(normal_map));
+
+    // dispose of old mesh and replace with new
+    mesh = out;
+    constrained_edge_map_initialized = false;
+    out.clear();
+    mesh.collect_garbage();
+  }
+
+  void isotropic_remesh(double target_edge_length, int iterations,
+                        bool protect_borders, bool auto_sharp_edges,
+                        double sharp_angle_threshold_degrees) {
+    if (mesh.is_empty()) {
+      return;
+    }
+
+    tag_edges(protect_borders, auto_sharp_edges, sharp_angle_threshold_degrees);
+
+    // CGAL warns to pre-split long preserved edges to avoid infinite loops in
+    // the algorithm
+    PMP::split_long_edges(
+        edges(mesh), target_edge_length, mesh,
+        CGAL::parameters::edge_is_constrained_map(constrained_emap));
+
+    PMP::isotropic_remeshing(mesh.faces(), target_edge_length, mesh,
+                             CGAL::parameters::number_of_iterations(iterations)
+                                 .edge_is_constrained_map(constrained_emap)
+                                 .protect_constraints(true));
+  }
+
+  void delaunay_remesh(double target_edge_length, double facet_distance,
+                       bool auto_sharp_edges,
+                       double sharp_angle_threshold_degrees) {
+    if (mesh.is_empty())
+      return;
+
+    auto outmesh = PMP::surface_Delaunay_remeshing(
+        mesh, CGAL::parameters::protect_constraints(auto_sharp_edges)
+                  .mesh_edge_size(target_edge_length)
+                  .mesh_facet_distance(facet_distance)
+                  .features_angle_bound(sharp_angle_threshold_degrees));
+
+    mesh = std::move(outmesh);
+    constrained_edge_map_initialized = false;
+    mesh.collect_garbage();
   }
 };
 
@@ -330,9 +403,6 @@ EMSCRIPTEN_BINDINGS(my_module) {
 
   emscripten::class_<PolyMesh>("PolyMesh")
       .constructor<>()
-      .function("addVertex", &PolyMesh::addVertex,
-                emscripten::allow_raw_pointers())
-      .function("addFace", &PolyMesh::addFace, emscripten::allow_raw_pointers())
       .function("buildFromBuffers", &PolyMesh::buildFromBuffers,
                 emscripten::allow_raw_pointers())
       .function("getIndices", &PolyMesh::getIndices,
@@ -347,10 +417,15 @@ EMSCRIPTEN_BINDINGS(my_module) {
                 emscripten::allow_raw_pointers())
       .function("dooSabin_smooth", &PolyMesh::dooSabin_smooth,
                 emscripten::allow_raw_pointers())
-      .function("segment", &PolyMesh::segment, emscripten::allow_raw_pointers())
-      .function("decimate", &PolyMesh::decimate,
-                emscripten::allow_raw_pointers())
       .function("alphaWrap", &PolyMesh::alphaWrap,
+                emscripten::allow_raw_pointers())
+      .function("remesh_planar_patches", &PolyMesh::remesh_planar_patches,
+                emscripten::allow_raw_pointers())
+      .function("isotropic_remesh", &PolyMesh::isotropic_remesh,
+                emscripten::allow_raw_pointers())
+      .function("delaunay_remesh", &PolyMesh::delaunay_remesh,
+                emscripten::allow_raw_pointers())
+      .function("maybe_triangulate", &PolyMesh::maybeTriangulate,
                 emscripten::allow_raw_pointers());
 
   emscripten::function("alphaWrapPointCloud", &alphaWrapPointCloud,

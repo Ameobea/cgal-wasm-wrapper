@@ -2,8 +2,8 @@ patch-deps:
   #!/bin/bash
 
   cp iterator.h_PATCHED ./libraries/CGAL-5.5.2/include/CGAL/boost/graph/iterator.h
-  sed -i 's/template traversal_with_priority_and_group_traversal/traversal_with_priority_and_group_traversal/g' ./libraries/CGAL-5.5.2/include/CGAL/AABB_tree.h
-  sed -i 's/ifdef CGAL_HAS_SSE2/if defined(CGAL_HAS_SSE2) \&\& !defined(__wasm__)/g' ./libraries/CGAL-5.5.2/include/CGAL/FPU.h
+  sed -i 's/template traversal_with_priority_and_group_traversal/traversal_with_priority_and_group_traversal/g' ./libraries/CGAL-5.6.3/include/CGAL/AABB_tree.h
+  sed -i 's/ifdef CGAL_HAS_SSE2/if defined(CGAL_HAS_SSE2) \&\& !defined(__wasm__)/g' ./libraries/CGAL-5.6.3/include/CGAL/FPU.h
   sed -i 's|  #include <mmintrin.h>|  // #include <mmintrin.h>|g' ./libraries/eigen-3.3.9/Eigen/Core
 
 build:
