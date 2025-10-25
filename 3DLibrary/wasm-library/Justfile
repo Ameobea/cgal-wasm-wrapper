@@ -1,10 +1,18 @@
 patch-deps:
   #!/bin/bash
 
-  cp iterator.h_PATCHED ./libraries/CGAL-5.5.2/include/CGAL/boost/graph/iterator.h
-  sed -i 's/template traversal_with_priority_and_group_traversal/traversal_with_priority_and_group_traversal/g' ./libraries/CGAL-5.6.3/include/CGAL/AABB_tree.h
-  sed -i 's/ifdef CGAL_HAS_SSE2/if defined(CGAL_HAS_SSE2) \&\& !defined(__wasm__)/g' ./libraries/CGAL-5.6.3/include/CGAL/FPU.h
-  sed -i 's|  #include <mmintrin.h>|  // #include <mmintrin.h>|g' ./libraries/eigen-3.3.9/Eigen/Core
+  if command -v gsed >/dev/null 2>&1; then
+    SED_CMD="gsed"
+  else
+    SED_CMD="sed"
+  fi
+
+  cp iterator.h_PATCHED ./libraries/CGAL-5.6.3/include/CGAL/boost/graph/iterator.h
+  $SED_CMD -i 's/template traversal_with_priority_and_group_traversal/traversal_with_priority_and_group_traversal/g' ./libraries/CGAL-5.6.3/include/CGAL/AABB_tree.h
+  $SED_CMD -i 's/ifdef CGAL_HAS_SSE2/if defined(CGAL_HAS_SSE2) \&\& !defined(__wasm__)/g' ./libraries/CGAL-5.6.3/include/CGAL/FPU.h
+  $SED_CMD -i 's|  #include <mmintrin.h>|  // #include <mmintrin.h>|g' ./libraries/eigen-3.3.9/Eigen/Core
+
+  cp cgal-fpu_PATCHED.h ./libraries/CGAL-5.6.3/include/CGAL/FPU.h
 
 build:
   #!/bin/bash
