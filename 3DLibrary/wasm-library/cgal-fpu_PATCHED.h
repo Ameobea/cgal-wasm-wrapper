@@ -340,34 +340,53 @@ inline double IA_bug_sqrt(double d)
 #  define CGAL_BUG_SQRT(d) std::sqrt(d)
 #endif
 
-static inline uint64_t as_u64(double x) {
-  uint64_t u; std::memcpy(&u, &x, sizeof u); return u;
+static inline int64_t as_i64(double x) {
+  int64_t i;
+  std::memcpy(&i, &x, sizeof i);
+  return i;
 }
-static inline double as_f64(uint64_t u) {
-  double x; std::memcpy(&x, &u, sizeof x); return x;
+static inline double as_f64(int64_t i) {
+  double x;
+  std::memcpy(&x, &i, sizeof x);
+  return x;
 }
 
 static inline bool is_pos_inf_u(uint64_t u) { return u == 0x7ff0000000000000ULL; }
 
+#define likely(x) __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
+
 // hand-rolled alternative to `nextafter(d, +infinity)` that skips some edge cases
 // that are _probably_ never hit
 static inline double nextUp(double x) {
-  uint64_t u = as_u64(x);
-  // Passthrough for NaNs and infinities
-  // if ((u & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL) {
+  int64_t u = as_i64(x);
+
+  // assuming that we never get +/- inf or NaNs...
+  // if ((u & 0x7ff0000000000000LL) == 0x7ff0000000000000LL) {
   //   // inf or NaN
   //   return is_pos_inf_u(u) ? x : x + x; // inf stays, NaN propagates
   // }
-  // if (u == 0x8000000000000000ULL) { // -0.0
-  //   return as_f64(0x0000000000000001ULL); // min subnormal +0
-  // }
-  if (static_cast<int64_t>(u) >= 0) {
-    // x >= +0: inc bit-pattern by 1
-    return as_f64(u + 1);
-  } else {
-    // x < 0: dec bit-pattern by 1 (less negative)
-    return as_f64(u - 1);
+
+  // special case for -0 needs to be handled
+  if (unlikely((u << 1) == 0)) {
+    return as_f64(0x0000000000000001LL);
   }
+
+  // if (u >= 0) {
+  //   // x >= +0: inc bit-pattern by 1
+  //   return as_f64(u + 1);
+  // } else {
+  //   // x < 0: dec bit-pattern by 1 (less negative)
+  //   return as_f64(u - 1);
+  // }
+
+  // branchless version:
+
+  const int64_t sign = u < 0;
+  // [0, 1] -> [1, -1]
+  const int64_t delta = 1 - sign * 2;
+
+  return as_f64(u + delta);
 }
 
 // Here are the operator macros that make use of the above.
