@@ -38,6 +38,7 @@
 #include <fstream>
 #include <igl/PI.h>
 #include <iostream>
+#include <string>
 #include <vector>
 
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
@@ -75,6 +76,7 @@ class PolyMesh {
 private:
   std::vector<double> vertices;
   std::vector<int> faces;
+  std::string last_error_;
 
   using edge_descriptor = boost::graph_traits<SurfaceMesh>::edge_descriptor;
   using face_descriptor = boost::graph_traits<SurfaceMesh>::face_descriptor;
@@ -84,6 +86,13 @@ private:
   // it)
   SurfaceMesh::Property_map<edge_descriptor, bool> constrained_emap;
   bool constrained_edge_map_initialized = false;
+
+  bool set_error(const std::string &message) {
+    last_error_ = message;
+    return false;
+  }
+
+  void clear_error() { last_error_.clear(); }
 
   void ensure_constrained_map() {
     if (!constrained_edge_map_initialized) {
@@ -127,22 +136,25 @@ public:
   PolyMesh() {}
 
   // TODO: should check to see if there's a native CGAL function for this
-  void buildFromBuffers(const std::vector<float> &vertices,
+  bool buildFromBuffers(const std::vector<float> &vertices,
                         const std::vector<uint32_t> &indices) {
     mesh.clear();
+    clear_error();
 
     if (vertices.size() % 3 != 0) {
       std::cout << "Error: Vertex buffer size must be divisible by 3 (x,y,z "
                    "components)"
                 << std::endl;
-      return;
+      return set_error(
+          "Vertex buffer size must be divisible by 3 (x,y,z components)");
     }
 
     if (indices.size() % 3 != 0) {
       std::cout
           << "Error: Index buffer size must be divisible by 3 (triangle faces)"
           << std::endl;
-      return;
+      return set_error(
+          "Index buffer size must be divisible by 3 (triangle faces)");
     }
 
     std::vector<SurfaceMesh::vertex_index> vertex_indices;
@@ -166,13 +178,19 @@ public:
 
       auto f = mesh.add_face(face_verts);
       if (f == SurfaceMesh::null_face()) {
-        throw std::runtime_error(
-            "Error: Failed to add face to mesh. The input indices may "
-            "contain duplicates or refer to non-existent vertices, incorrect "
-            "winding order, or other issues.");
+        std::string error_msg =
+            "Failed to add face to mesh. The input indices may contain "
+            "duplicates or refer to non-existent vertices, incorrect winding "
+            "order, or other issues.";
+        std::cout << "Error: " << error_msg << std::endl;
+        return set_error(error_msg);
       }
     }
+
+    return true;
   }
+
+  std::string getLastError() const { return last_error_; }
 
   void triangulate_in_place() { PMP::triangulate_faces(mesh); }
 
@@ -426,6 +444,8 @@ EMSCRIPTEN_BINDINGS(my_module) {
       .function("delaunay_remesh", &PolyMesh::delaunay_remesh,
                 emscripten::allow_raw_pointers())
       .function("maybe_triangulate", &PolyMesh::maybeTriangulate,
+                emscripten::allow_raw_pointers())
+      .function("getLastError", &PolyMesh::getLastError,
                 emscripten::allow_raw_pointers());
 
   emscripten::function("alphaWrapPointCloud", &alphaWrapPointCloud,
