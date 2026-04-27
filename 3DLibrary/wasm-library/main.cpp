@@ -46,6 +46,13 @@
 #include <CGAL/mesh_segmentation.h>
 #include <CGAL/property_map.h>
 
+// 2D Constrained Delaunay Triangulation
+#include <CGAL/Constrained_Delaunay_triangulation_2.h>
+#include <CGAL/Constrained_triangulation_face_base_2.h>
+#include <CGAL/Triangulation_vertex_base_2.h>
+#include <CGAL/mark_domain_in_triangulation.h>
+#include <map>
+
 namespace PMP = CGAL::Polygon_mesh_processing;
 namespace SMS = CGAL::Surface_mesh_simplification;
 
@@ -415,9 +422,140 @@ PolyMesh alphaWrapPointCloud(const std::vector<float> &vertices,
   return result;
 }
 
+// ============================================================================
+// 2D Constrained Delaunay Triangulation for polygon triangulation
+// ============================================================================
+
+// CDT2D type definitions
+typedef CGAL::Triangulation_vertex_base_2<Kernel> CDT2D_Vb;
+typedef CGAL::Constrained_triangulation_face_base_2<Kernel> CDT2D_Fb;
+typedef CGAL::Triangulation_data_structure_2<CDT2D_Vb, CDT2D_Fb> CDT2D_TDS;
+typedef CGAL::No_constraint_intersection_requiring_constructions_tag CDT2D_Itag;
+typedef CGAL::Constrained_Delaunay_triangulation_2<Kernel, CDT2D_TDS, CDT2D_Itag>
+    CDT2D;
+
+class CDT2DResult {
+private:
+  std::vector<float> vertices_;        // x, y pairs for output vertices
+  std::vector<uint32_t> indices_;      // triangle indices (3 per triangle)
+  std::vector<int32_t> vertex_mapping_; // input vtx idx -> output vtx idx
+  bool success_;
+  std::string error_;
+
+public:
+  CDT2DResult()
+      : success_(false), error_("Not initialized") {}
+
+  CDT2DResult(std::vector<float> vertices, std::vector<uint32_t> indices,
+              std::vector<int32_t> vertex_mapping)
+      : vertices_(std::move(vertices)), indices_(std::move(indices)),
+        vertex_mapping_(std::move(vertex_mapping)), success_(true) {}
+
+  CDT2DResult(std::string error)
+      : success_(false), error_(std::move(error)) {}
+
+  bool success() const { return success_; }
+  std::string getError() const { return error_; }
+
+  std::vector<float> getVertices() const { return vertices_; }
+  std::vector<uint32_t> getIndices() const { return indices_; }
+  std::vector<int32_t> getVertexMapping() const { return vertex_mapping_; }
+
+  size_t getVertexCount() const { return vertices_.size() / 2; }
+  size_t getTriangleCount() const { return indices_.size() / 3; }
+};
+
+CDT2DResult triangulatePolygon2D(const std::vector<float> &input_vertices) {
+  // Input: flat array of 2D points [x0, y0, x1, y1, ...] forming a closed
+  // polygon
+  if (input_vertices.size() < 6) {
+    return CDT2DResult("Need at least 3 vertices (6 floats) to form a polygon");
+  }
+  if (input_vertices.size() % 2 != 0) {
+    return CDT2DResult(
+        "Input must have even number of floats (x, y pairs)");
+  }
+
+  const size_t num_input_verts = input_vertices.size() / 2;
+
+  CDT2D cdt;
+  std::vector<CDT2D::Vertex_handle> handles(num_input_verts);
+
+  // Insert all vertices
+  for (size_t i = 0; i < num_input_verts; ++i) {
+    const double x = static_cast<double>(input_vertices[2 * i]);
+    const double y = static_cast<double>(input_vertices[2 * i + 1]);
+    handles[i] = cdt.insert(CDT2D::Point(x, y));
+  }
+
+  // Insert constraint edges to form the closed polygon
+  try {
+    for (size_t i = 0; i < num_input_verts; ++i) {
+      const size_t next = (i + 1) % num_input_verts;
+      // Skip zero-length edges (coincident vertices)
+      if (handles[i] != handles[next]) {
+        cdt.insert_constraint(handles[i], handles[next]);
+      }
+    }
+  } catch (const CDT2D::Intersection_of_constraints_exception &) {
+    return CDT2DResult("Self-intersecting polygon detected");
+  } catch (const std::exception &e) {
+    return CDT2DResult(std::string("Error inserting constraints: ") + e.what());
+  }
+
+  // Check we have a valid triangulation
+  if (cdt.dimension() < 2) {
+    return CDT2DResult("Degenerate polygon - all points are collinear");
+  }
+
+  // Mark interior faces using CGAL's flood-fill algorithm
+  std::unordered_map<CDT2D::Face_handle, bool> in_domain_map;
+  boost::associative_property_map<std::unordered_map<CDT2D::Face_handle, bool>>
+      in_domain(in_domain_map);
+  CGAL::mark_domain_in_triangulation(cdt, in_domain);
+
+  // Build output vertices and handle-to-index mapping
+  std::vector<float> out_vertices;
+  std::map<CDT2D::Vertex_handle, uint32_t> vh_to_idx;
+
+  for (auto vh = cdt.finite_vertices_begin(); vh != cdt.finite_vertices_end();
+       ++vh) {
+    vh_to_idx[vh] = static_cast<uint32_t>(out_vertices.size() / 2);
+    out_vertices.push_back(static_cast<float>(vh->point().x()));
+    out_vertices.push_back(static_cast<float>(vh->point().y()));
+  }
+
+  // Build vertex mapping: input index -> output index
+  // Handles coincident vertices automatically (they share the same handle)
+  std::vector<int32_t> vertex_mapping(num_input_verts);
+  for (size_t i = 0; i < num_input_verts; ++i) {
+    vertex_mapping[i] = static_cast<int32_t>(vh_to_idx[handles[i]]);
+  }
+
+  // Extract interior triangles
+  std::vector<uint32_t> out_indices;
+  for (auto fit = cdt.finite_faces_begin(); fit != cdt.finite_faces_end();
+       ++fit) {
+    if (in_domain_map[fit]) {
+      out_indices.push_back(vh_to_idx[fit->vertex(0)]);
+      out_indices.push_back(vh_to_idx[fit->vertex(1)]);
+      out_indices.push_back(vh_to_idx[fit->vertex(2)]);
+    }
+  }
+
+  if (out_indices.empty()) {
+    return CDT2DResult("No interior triangles found - polygon may be "
+                       "degenerate or have incorrect winding");
+  }
+
+  return CDT2DResult(std::move(out_vertices), std::move(out_indices),
+                     std::move(vertex_mapping));
+}
+
 EMSCRIPTEN_BINDINGS(my_module) {
   register_vector_custom<float>("vector<float>");
   register_vector_custom<uint32_t>("vector<uint32_t>");
+  register_vector_custom<int32_t>("vector<int32_t>");
 
   emscripten::class_<PolyMesh>("PolyMesh")
       .constructor<>()
@@ -449,5 +587,19 @@ EMSCRIPTEN_BINDINGS(my_module) {
                 emscripten::allow_raw_pointers());
 
   emscripten::function("alphaWrapPointCloud", &alphaWrapPointCloud,
+                       emscripten::allow_raw_pointers());
+
+  // 2D Constrained Delaunay Triangulation
+  emscripten::class_<CDT2DResult>("CDT2DResult")
+      .constructor<>()
+      .function("success", &CDT2DResult::success)
+      .function("getError", &CDT2DResult::getError)
+      .function("getVertices", &CDT2DResult::getVertices)
+      .function("getIndices", &CDT2DResult::getIndices)
+      .function("getVertexMapping", &CDT2DResult::getVertexMapping)
+      .function("getVertexCount", &CDT2DResult::getVertexCount)
+      .function("getTriangleCount", &CDT2DResult::getTriangleCount);
+
+  emscripten::function("triangulatePolygon2D", &triangulatePolygon2D,
                        emscripten::allow_raw_pointers());
 }
