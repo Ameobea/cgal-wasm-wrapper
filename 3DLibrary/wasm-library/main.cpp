@@ -49,8 +49,18 @@
 // 2D Constrained Delaunay Triangulation
 #include <CGAL/Constrained_Delaunay_triangulation_2.h>
 #include <CGAL/Constrained_triangulation_face_base_2.h>
+#include <CGAL/Delaunay_mesh_face_base_2.h>
+#include <CGAL/Delaunay_mesh_size_criteria_2.h>
+#include <CGAL/Delaunay_mesher_2.h>
 #include <CGAL/Triangulation_vertex_base_2.h>
 #include <CGAL/mark_domain_in_triangulation.h>
+
+// 2D Boolean Set Operations (exact-arithmetic backend)
+#include <CGAL/Boolean_set_operations_2.h>
+#include <CGAL/Exact_predicates_exact_constructions_kernel.h>
+#include <CGAL/Polygon_2.h>
+#include <CGAL/Polygon_set_2.h>
+#include <CGAL/Polygon_with_holes_2.h>
 #include <map>
 
 namespace PMP = CGAL::Polygon_mesh_processing;
@@ -422,37 +432,31 @@ PolyMesh alphaWrapPointCloud(const std::vector<float> &vertices,
   return result;
 }
 
-// ============================================================================
-// 2D Constrained Delaunay Triangulation for polygon triangulation
-// ============================================================================
-
-// CDT2D type definitions
 typedef CGAL::Triangulation_vertex_base_2<Kernel> CDT2D_Vb;
 typedef CGAL::Constrained_triangulation_face_base_2<Kernel> CDT2D_Fb;
 typedef CGAL::Triangulation_data_structure_2<CDT2D_Vb, CDT2D_Fb> CDT2D_TDS;
 typedef CGAL::No_constraint_intersection_requiring_constructions_tag CDT2D_Itag;
-typedef CGAL::Constrained_Delaunay_triangulation_2<Kernel, CDT2D_TDS, CDT2D_Itag>
+typedef CGAL::Constrained_Delaunay_triangulation_2<Kernel, CDT2D_TDS,
+                                                   CDT2D_Itag>
     CDT2D;
 
 class CDT2DResult {
 private:
-  std::vector<float> vertices_;        // x, y pairs for output vertices
-  std::vector<uint32_t> indices_;      // triangle indices (3 per triangle)
+  std::vector<float> vertices_;         // x, y pairs for output vertices
+  std::vector<uint32_t> indices_;       // triangle indices (3 per triangle)
   std::vector<int32_t> vertex_mapping_; // input vtx idx -> output vtx idx
   bool success_;
   std::string error_;
 
 public:
-  CDT2DResult()
-      : success_(false), error_("Not initialized") {}
+  CDT2DResult() : success_(false), error_("Not initialized") {}
 
   CDT2DResult(std::vector<float> vertices, std::vector<uint32_t> indices,
               std::vector<int32_t> vertex_mapping)
       : vertices_(std::move(vertices)), indices_(std::move(indices)),
         vertex_mapping_(std::move(vertex_mapping)), success_(true) {}
 
-  CDT2DResult(std::string error)
-      : success_(false), error_(std::move(error)) {}
+  CDT2DResult(std::string error) : success_(false), error_(std::move(error)) {}
 
   bool success() const { return success_; }
   std::string getError() const { return error_; }
@@ -472,8 +476,7 @@ CDT2DResult triangulatePolygon2D(const std::vector<float> &input_vertices) {
     return CDT2DResult("Need at least 3 vertices (6 floats) to form a polygon");
   }
   if (input_vertices.size() % 2 != 0) {
-    return CDT2DResult(
-        "Input must have even number of floats (x, y pairs)");
+    return CDT2DResult("Input must have even number of floats (x, y pairs)");
   }
 
   const size_t num_input_verts = input_vertices.size() / 2;
@@ -481,14 +484,12 @@ CDT2DResult triangulatePolygon2D(const std::vector<float> &input_vertices) {
   CDT2D cdt;
   std::vector<CDT2D::Vertex_handle> handles(num_input_verts);
 
-  // Insert all vertices
   for (size_t i = 0; i < num_input_verts; ++i) {
     const double x = static_cast<double>(input_vertices[2 * i]);
     const double y = static_cast<double>(input_vertices[2 * i + 1]);
     handles[i] = cdt.insert(CDT2D::Point(x, y));
   }
 
-  // Insert constraint edges to form the closed polygon
   try {
     for (size_t i = 0; i < num_input_verts; ++i) {
       const size_t next = (i + 1) % num_input_verts;
@@ -503,7 +504,6 @@ CDT2DResult triangulatePolygon2D(const std::vector<float> &input_vertices) {
     return CDT2DResult(std::string("Error inserting constraints: ") + e.what());
   }
 
-  // Check we have a valid triangulation
   if (cdt.dimension() < 2) {
     return CDT2DResult("Degenerate polygon - all points are collinear");
   }
@@ -550,6 +550,272 @@ CDT2DResult triangulatePolygon2D(const std::vector<float> &input_vertices) {
 
   return CDT2DResult(std::move(out_vertices), std::move(out_indices),
                      std::move(vertex_mapping));
+}
+
+// Multi-subpath / refining CDT.  Uses `Delaunay_mesh_face_base_2` so that
+// `is_in_domain()` is stored on each face by `mark_domain_in_triangulation`
+// and so `Delaunay_mesher_2` can refine.
+typedef CGAL::Triangulation_vertex_base_2<Kernel> CDT2DH_Vb;
+typedef CGAL::Delaunay_mesh_face_base_2<Kernel> CDT2DH_Fb;
+typedef CGAL::Triangulation_data_structure_2<CDT2DH_Vb, CDT2DH_Fb> CDT2DH_TDS;
+typedef CGAL::No_constraint_intersection_requiring_constructions_tag
+    CDT2DH_Itag;
+typedef CGAL::Constrained_Delaunay_triangulation_2<Kernel, CDT2DH_TDS,
+                                                   CDT2DH_Itag>
+    CDT2DH;
+typedef CGAL::Delaunay_mesh_size_criteria_2<CDT2DH> CDT2DH_Criteria;
+
+CDT2DResult
+triangulatePolygon2DWithHoles(const std::vector<float> &input_vertices,
+                              const std::vector<uint32_t> &subpath_lengths,
+                              float max_edge_len, float min_angle_bound,
+                              bool refine) {
+  if (input_vertices.size() % 2 != 0) {
+    return CDT2DResult("Input must have even number of floats (x, y pairs)");
+  }
+  if (subpath_lengths.empty()) {
+    return CDT2DResult("Need at least one subpath");
+  }
+
+  const size_t num_input_verts = input_vertices.size() / 2;
+  size_t total_from_subpaths = 0;
+  for (auto len : subpath_lengths) {
+    if (len < 3) {
+      return CDT2DResult("Each subpath must have at least 3 vertices");
+    }
+    total_from_subpaths += len;
+  }
+  if (total_from_subpaths != num_input_verts) {
+    return CDT2DResult(
+        "Sum of subpath_lengths does not match the vertex count");
+  }
+
+  CDT2DH cdt;
+  std::vector<CDT2DH::Vertex_handle> handles(num_input_verts);
+
+  for (size_t i = 0; i < num_input_verts; ++i) {
+    const double x = static_cast<double>(input_vertices[2 * i]);
+    const double y = static_cast<double>(input_vertices[2 * i + 1]);
+    handles[i] = cdt.insert(CDT2DH::Point(x, y));
+  }
+
+  try {
+    size_t offset = 0;
+    for (auto len : subpath_lengths) {
+      for (size_t i = 0; i < len; ++i) {
+        const size_t cur = offset + i;
+        const size_t next = offset + ((i + 1) % len);
+        if (handles[cur] != handles[next]) {
+          cdt.insert_constraint(handles[cur], handles[next]);
+        }
+      }
+      offset += len;
+    }
+  } catch (const CDT2DH::Intersection_of_constraints_exception &) {
+    return CDT2DResult("Self-intersecting or overlapping constraints detected");
+  } catch (const std::exception &e) {
+    return CDT2DResult(std::string("Error inserting constraints: ") + e.what());
+  }
+
+  if (cdt.dimension() < 2) {
+    return CDT2DResult("Degenerate input - all points are collinear");
+  }
+
+  // Flood-fills from the unbounded face across constraint edges, marking
+  // alternating in/out by nesting depth.  Stored on each face via
+  // `is_in_domain()` because we used `Delaunay_mesh_face_base_2`.
+  CGAL::mark_domain_in_triangulation(cdt);
+
+  if (refine) {
+    try {
+      CGAL::refine_Delaunay_mesh_2(
+          cdt, CGAL::parameters::domain_is_initialized(true).criteria(
+                   CDT2DH_Criteria(static_cast<double>(min_angle_bound),
+                                   static_cast<double>(max_edge_len))));
+    } catch (const std::exception &e) {
+      return CDT2DResult(std::string("Error refining mesh: ") + e.what());
+    }
+  }
+
+  std::vector<float> out_vertices;
+  std::map<CDT2DH::Vertex_handle, uint32_t> vh_to_idx;
+
+  for (auto vh = cdt.finite_vertices_begin(); vh != cdt.finite_vertices_end();
+       ++vh) {
+    vh_to_idx[vh] = static_cast<uint32_t>(out_vertices.size() / 2);
+    out_vertices.push_back(static_cast<float>(vh->point().x()));
+    out_vertices.push_back(static_cast<float>(vh->point().y()));
+  }
+
+  // Refinement adds Steiner points with no input correspondent, so we only
+  // emit the mapping in the non-refining case (where it's well-defined).
+  std::vector<int32_t> vertex_mapping;
+  if (!refine) {
+    vertex_mapping.resize(num_input_verts);
+    for (size_t i = 0; i < num_input_verts; ++i) {
+      vertex_mapping[i] = static_cast<int32_t>(vh_to_idx[handles[i]]);
+    }
+  }
+
+  std::vector<uint32_t> out_indices;
+  for (auto fit = cdt.finite_faces_begin(); fit != cdt.finite_faces_end();
+       ++fit) {
+    if (fit->is_in_domain()) {
+      out_indices.push_back(vh_to_idx[fit->vertex(0)]);
+      out_indices.push_back(vh_to_idx[fit->vertex(1)]);
+      out_indices.push_back(vh_to_idx[fit->vertex(2)]);
+    }
+  }
+
+  if (out_indices.empty()) {
+    return CDT2DResult("No interior triangles found - check subpath nesting "
+                       "and constraint topology");
+  }
+
+  return CDT2DResult(std::move(out_vertices), std::move(out_indices),
+                     std::move(vertex_mapping));
+}
+
+// ---------------------------------------------------------------------------
+// 2D Boolean set operations on polygons (exact-arithmetic alternative to
+// Clipper2).  Inputs are accepted in the same flat-coords + per-subpath-lengths
+// format as the CDT-with-holes function.  Within each input, subpaths are
+// combined under even-odd / XOR semantics (each subpath toggles inside/outside
+// of overlapping regions), then the chosen boolean op is applied between
+// subject and clip.  Output is flattened in the same format: outer boundaries
+// emitted CCW followed by their holes CW, one polygon-with-holes after another.
+// ---------------------------------------------------------------------------
+typedef CGAL::Exact_predicates_exact_constructions_kernel EK;
+typedef EK::Point_2 EK_Point_2;
+typedef CGAL::Polygon_2<EK> EK_Polygon_2;
+typedef CGAL::Polygon_with_holes_2<EK> EK_Polygon_with_holes_2;
+typedef CGAL::Polygon_set_2<EK> EK_Polygon_set_2;
+
+class PolygonBoolean2DResult {
+private:
+  std::vector<float> coords_;
+  std::vector<uint32_t> path_lengths_;
+  bool success_;
+  std::string error_;
+
+public:
+  PolygonBoolean2DResult() : success_(false), error_("Not initialized") {}
+  PolygonBoolean2DResult(std::vector<float> coords,
+                         std::vector<uint32_t> path_lengths)
+      : coords_(std::move(coords)), path_lengths_(std::move(path_lengths)),
+        success_(true) {}
+  PolygonBoolean2DResult(std::string error)
+      : success_(false), error_(std::move(error)) {}
+
+  bool success() const { return success_; }
+  std::string getError() const { return error_; }
+  std::vector<float> getCoords() const { return coords_; }
+  std::vector<uint32_t> getPathLengths() const { return path_lengths_; }
+};
+
+static bool buildEKPolygonSet(EK_Polygon_set_2 &set,
+                              const std::vector<float> &coords,
+                              const std::vector<uint32_t> &subpath_lengths,
+                              std::string &err) {
+  size_t offset = 0;
+  for (auto len : subpath_lengths) {
+    if (len < 3) {
+      offset += len;
+      continue;
+    }
+    EK_Polygon_2 poly;
+    for (size_t i = 0; i < len; ++i) {
+      const double x = static_cast<double>(coords[2 * (offset + i)]);
+      const double y = static_cast<double>(coords[2 * (offset + i) + 1]);
+      poly.push_back(EK_Point_2(x, y));
+    }
+    offset += len;
+    if (poly.size() < 3) {
+      continue;
+    }
+    if (!poly.is_simple()) {
+      err = "CGAL boolean: input subpath is self-intersecting (not simple)";
+      return false;
+    }
+    if (poly.orientation() == CGAL::CLOCKWISE) {
+      poly.reverse_orientation();
+    }
+    // EvenOdd / XOR build: nested subpaths cancel to form holes; non-overlapping
+    // subpaths sum to a union.  Matches geoscript's nesting-based fill model.
+    set.symmetric_difference(poly);
+  }
+  return true;
+}
+
+static void extractEKPolygonSet(const EK_Polygon_set_2 &set,
+                                std::vector<float> &out_coords,
+                                std::vector<uint32_t> &out_lengths) {
+  std::vector<EK_Polygon_with_holes_2> result;
+  set.polygons_with_holes(std::back_inserter(result));
+  for (const auto &pwh : result) {
+    if (pwh.is_unbounded()) {
+      continue;
+    }
+    const auto &outer = pwh.outer_boundary();
+    out_lengths.push_back(static_cast<uint32_t>(outer.size()));
+    for (auto it = outer.vertices_begin(); it != outer.vertices_end(); ++it) {
+      out_coords.push_back(static_cast<float>(CGAL::to_double(it->x())));
+      out_coords.push_back(static_cast<float>(CGAL::to_double(it->y())));
+    }
+    for (auto h = pwh.holes_begin(); h != pwh.holes_end(); ++h) {
+      out_lengths.push_back(static_cast<uint32_t>(h->size()));
+      for (auto it = h->vertices_begin(); it != h->vertices_end(); ++it) {
+        out_coords.push_back(static_cast<float>(CGAL::to_double(it->x())));
+        out_coords.push_back(static_cast<float>(CGAL::to_double(it->y())));
+      }
+    }
+  }
+}
+
+// op: 0=union, 1=intersect, 2=difference (subject - clip), 3=xor
+PolygonBoolean2DResult
+pathBoolean2D(const std::vector<float> &subject_coords,
+              const std::vector<uint32_t> &subject_lengths,
+              const std::vector<float> &clip_coords,
+              const std::vector<uint32_t> &clip_lengths, int op) {
+  try {
+    EK_Polygon_set_2 subject_set;
+    EK_Polygon_set_2 clip_set;
+    std::string err;
+    if (!buildEKPolygonSet(subject_set, subject_coords, subject_lengths, err)) {
+      return PolygonBoolean2DResult(err);
+    }
+    if (!buildEKPolygonSet(clip_set, clip_coords, clip_lengths, err)) {
+      return PolygonBoolean2DResult(err);
+    }
+
+    EK_Polygon_set_2 result_set(subject_set);
+    switch (op) {
+    case 0:
+      result_set.join(clip_set);
+      break;
+    case 1:
+      result_set.intersection(clip_set);
+      break;
+    case 2:
+      result_set.difference(clip_set);
+      break;
+    case 3:
+      result_set.symmetric_difference(clip_set);
+      break;
+    default:
+      return PolygonBoolean2DResult("CGAL boolean: unknown op id " +
+                                    std::to_string(op));
+    }
+
+    std::vector<float> out_coords;
+    std::vector<uint32_t> out_lengths;
+    extractEKPolygonSet(result_set, out_coords, out_lengths);
+    return PolygonBoolean2DResult(std::move(out_coords), std::move(out_lengths));
+  } catch (const std::exception &e) {
+    return PolygonBoolean2DResult(std::string("CGAL boolean error: ") +
+                                  e.what());
+  }
 }
 
 EMSCRIPTEN_BINDINGS(my_module) {
@@ -601,5 +867,19 @@ EMSCRIPTEN_BINDINGS(my_module) {
       .function("getTriangleCount", &CDT2DResult::getTriangleCount);
 
   emscripten::function("triangulatePolygon2D", &triangulatePolygon2D,
+                       emscripten::allow_raw_pointers());
+  emscripten::function("triangulatePolygon2DWithHoles",
+                       &triangulatePolygon2DWithHoles,
+                       emscripten::allow_raw_pointers());
+
+  // 2D Boolean Set Operations
+  emscripten::class_<PolygonBoolean2DResult>("PolygonBoolean2DResult")
+      .constructor<>()
+      .function("success", &PolygonBoolean2DResult::success)
+      .function("getError", &PolygonBoolean2DResult::getError)
+      .function("getCoords", &PolygonBoolean2DResult::getCoords)
+      .function("getPathLengths", &PolygonBoolean2DResult::getPathLengths);
+
+  emscripten::function("pathBoolean2D", &pathBoolean2D,
                        emscripten::allow_raw_pointers());
 }
