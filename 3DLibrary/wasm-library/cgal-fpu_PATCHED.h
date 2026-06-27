@@ -292,7 +292,16 @@ inline __m128d swap_m128d(__m128d x){
 // In case one does not care about such "extreme" situations, one can
 // set CGAL_IA_NO_X86_OVER_UNDER_FLOW_PROTECT to pretend there is no excess
 // precision.
-#if defined CGAL_FPU_HAS_EXCESS_PRECISION
+// In CGAL_ALWAYS_ROUND_TO_NEAREST mode the runtime and compile-time rounding modes are
+// both round-to-nearest, and the directed widening that makes intervals valid is applied
+// explicitly and asymmetrically by nextUp() (which is itself a bit-cast optimization
+// barrier). The opacify/stop-cprop barriers exist solely to keep the compiler from folding
+// or migrating ops across a hardware directed-rounding switch that never happens here, so
+// they are correctness-neutral in this mode — and on Wasm IA_opacify forces a linear-memory
+// spill+reload per interval op. CGAL_IA_RTN_NO_BARRIERS opts into dropping them.
+#if defined(CGAL_ALWAYS_ROUND_TO_NEAREST) && defined(CGAL_IA_RTN_NO_BARRIERS)
+#  define CGAL_IA_FORCE_TO_DOUBLE(x) (x)
+#elif defined CGAL_FPU_HAS_EXCESS_PRECISION
 #  define CGAL_IA_FORCE_TO_DOUBLE(x) CGAL::IA_force_to_double(x)
 #elif 1
 // LLVM doesn't have -frounding-math so needs extra protection.
@@ -308,7 +317,9 @@ inline __m128d swap_m128d(__m128d x){
 
 // We sometimes need to stop constant propagation,
 // because operations are done with a wrong rounding mode at compile time.
-#ifndef CGAL_IA_DONT_STOP_CONSTANT_PROPAGATION
+#if defined(CGAL_ALWAYS_ROUND_TO_NEAREST) && defined(CGAL_IA_RTN_NO_BARRIERS)
+#  define CGAL_IA_STOP_CPROP(x)    (x)
+#elif !defined(CGAL_IA_DONT_STOP_CONSTANT_PROPAGATION)
 #  define CGAL_IA_STOP_CPROP(x)    CGAL::IA_opacify(x)
 #else
 #  define CGAL_IA_STOP_CPROP(x)    (x)

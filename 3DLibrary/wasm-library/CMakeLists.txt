@@ -8,6 +8,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 project( cgalTest )
 
 add_compile_definitions(CGAL_ALWAYS_ROUND_TO_NEAREST)
+# Drop the interval-arithmetic opacify barriers: in ROUND_TO_NEAREST mode they guard against
+# a hardware directed-rounding switch that never happens, so they are correctness-neutral
+# (verified byte-identical across alpha_wrap / CDT / boolean) but on Wasm force a linear-memory
+# spill+reload per interval op. ~10% faster alpha_wrap. See perf/FINDINGS.md, perf/EXPERIMENTS.md.
+add_compile_definitions(CGAL_IA_RTN_NO_BARRIERS)
 
 
 # Include cgal and boost headers
