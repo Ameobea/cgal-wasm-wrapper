@@ -569,9 +569,13 @@ CDT2DResult
 triangulatePolygon2DWithHoles(const std::vector<float> &input_vertices,
                               const std::vector<uint32_t> &subpath_lengths,
                               float max_edge_len, float min_angle_bound,
-                              bool refine) {
+                              bool refine,
+                              const std::vector<float> &interior_points) {
   if (input_vertices.size() % 2 != 0) {
     return CDT2DResult("Input must have even number of floats (x, y pairs)");
+  }
+  if (interior_points.size() % 2 != 0) {
+    return CDT2DResult("interior_points must have even number of floats (x, y pairs)");
   }
   if (subpath_lengths.empty()) {
     return CDT2DResult("Need at least one subpath");
@@ -619,6 +623,15 @@ triangulatePolygon2DWithHoles(const std::vector<float> &input_vertices,
 
   if (cdt.dimension() < 2) {
     return CDT2DResult("Degenerate input - all points are collinear");
+  }
+
+  // Caller-supplied free interior points (e.g. distortion-driven Steiner points).  Inserted
+  // unconstrained, before domain marking, so `mark_domain_in_triangulation` sets `is_in_domain()`
+  // on the faces they create.  Callers must keep these inside the domain — an out-of-domain point
+  // would surface as an unreferenced output vertex.
+  for (size_t i = 0; i < interior_points.size() / 2; ++i) {
+    cdt.insert(CDT2DH::Point(static_cast<double>(interior_points[2 * i]),
+                             static_cast<double>(interior_points[2 * i + 1])));
   }
 
   // Flood-fills from the unbounded face across constraint edges, marking
