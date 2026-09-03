@@ -13,6 +13,7 @@ patch-deps:
   $SED_CMD -i 's|  #include <mmintrin.h>|  // #include <mmintrin.h>|g' ./libraries/eigen-3.3.9/Eigen/Core
 
   cp cgal-fpu_PATCHED.h ./libraries/CGAL-5.6.3/include/CGAL/FPU.h
+  python3 patch-remesh-planar-patches.py ./libraries/CGAL-5.6.3/include/CGAL/Polygon_mesh_processing/remesh_planar_patches.h
 
 build:
   #!/bin/bash

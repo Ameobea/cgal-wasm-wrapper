@@ -301,52 +301,66 @@ public:
     return result;
   }
 
-  void remesh_planar_patches(double max_angle_deg, double max_offset) {
+  bool remesh_planar_patches(double max_angle_deg, double max_offset) {
+    clear_error();
     if (mesh.is_empty()) {
-      return;
+      return true;
     }
+    try {
+      std::vector<std::size_t> region_ids(num_faces(mesh));
+      // corner status of vertices
+      std::vector<std::size_t> corner_id_map(num_vertices(mesh), -1);
+      // mark edges at the boundary of regions
+      std::vector<bool> ecm(num_edges(mesh), false);
+      // normal of the supporting planes of the regions detected
+      boost::vector_property_map<CGAL::Epick::Vector_3> normal_map;
 
-    std::vector<std::size_t> region_ids(num_faces(mesh));
-    // corner status of vertices
-    std::vector<std::size_t> corner_id_map(num_vertices(mesh), -1);
-    // mark edges at the boundary of regions
-    std::vector<bool> ecm(num_edges(mesh), false);
-    // normal of the supporting planes of the regions detected
-    boost::vector_property_map<CGAL::Epick::Vector_3> normal_map;
+      auto max_angle_rads = max_angle_deg * CGAL_PI / 180.0;
+      auto cos_max_angle = std::cos(max_angle_rads);
 
-    auto max_angle_rads = max_angle_deg * CGAL_PI / 180.0;
-    auto cos_max_angle = std::cos(max_angle_rads);
+      // detect planar regions in the mesh
+      std::size_t nb_regions = PMP::region_growing_of_planes_on_faces(
+          mesh, CGAL::make_random_access_property_map(region_ids),
+          CGAL::parameters::cosine_of_maximum_angle(cos_max_angle)
+              .region_primitive_map(normal_map)
+              .maximum_distance(max_offset));
 
-    // detect planar regions in the mesh
-    std::size_t nb_regions = PMP::region_growing_of_planes_on_faces(
-        mesh, CGAL::make_random_access_property_map(region_ids),
-        CGAL::parameters::cosine_of_maximum_angle(cos_max_angle)
-            .region_primitive_map(normal_map)
-            .maximum_distance(max_offset));
+      // detect corner vertices on the boundary of planar regions
+      std::size_t nb_corners = PMP::detect_corners_of_regions(
+          mesh, CGAL::make_random_access_property_map(region_ids), nb_regions,
+          CGAL::make_random_access_property_map(corner_id_map),
+          CGAL::parameters::cosine_of_maximum_angle(cos_max_angle)
+              .maximum_distance(max_offset)
+              .edge_is_constrained_map(
+                  CGAL::make_random_access_property_map(ecm)));
 
-    // detect corner vertices on the boundary of planar regions
-    std::size_t nb_corners = PMP::detect_corners_of_regions(
-        mesh, CGAL::make_random_access_property_map(region_ids), nb_regions,
-        CGAL::make_random_access_property_map(corner_id_map),
-        CGAL::parameters::cosine_of_maximum_angle(cos_max_angle)
-            .maximum_distance(max_offset)
-            .edge_is_constrained_map(
-                CGAL::make_random_access_property_map(ecm)));
+      // returns false both when some patches were kept as-is (output still
+      // valid) and when the remeshed patches could not be assembled (output
+      // left empty)
+      SurfaceMesh out;
+      PMP::remesh_almost_planar_patches(
+          mesh, out, nb_regions, nb_corners,
+          CGAL::make_random_access_property_map(region_ids),
+          CGAL::make_random_access_property_map(corner_id_map),
+          CGAL::make_random_access_property_map(ecm),
+          CGAL::parameters::patch_normal_map(normal_map));
+      if (out.is_empty()) {
+        return set_error(
+            "CGAL could not assemble the remeshed planar patches into a valid "
+            "mesh. This is usually caused by sliver triangles or near-coincident "
+            "vertices at the scale of float precision, often left behind by "
+            "boolean operations; try `simplify` first or a different "
+            "`max_angle_deg`.");
+      }
 
-    // run the remeshing algorithm using filled properties
-    SurfaceMesh out;
-    PMP::remesh_almost_planar_patches(
-        mesh, out, nb_regions, nb_corners,
-        CGAL::make_random_access_property_map(region_ids),
-        CGAL::make_random_access_property_map(corner_id_map),
-        CGAL::make_random_access_property_map(ecm),
-        CGAL::parameters::patch_normal_map(normal_map));
-
-    // dispose of old mesh and replace with new
-    mesh = out;
-    constrained_edge_map_initialized = false;
-    out.clear();
-    mesh.collect_garbage();
+      mesh = out;
+      constrained_edge_map_initialized = false;
+      mesh.collect_garbage();
+      return true;
+    } catch (const std::exception &e) {
+      return set_error(std::string("CGAL error in remesh_planar_patches: ") +
+                       e.what());
+    }
   }
 
   void isotropic_remesh(double target_edge_length, int iterations,
