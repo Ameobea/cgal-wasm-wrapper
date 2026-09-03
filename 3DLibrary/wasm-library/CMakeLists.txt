@@ -1,11 +1,8 @@
-# Created by the script cgal_create_CMakeLists
-# This is the CMake script for compiling a set of CGAL applications.
-
-cmake_minimum_required(VERSION 3.1...3.23)
-set(CMAKE_CXX_STANDARD 14)
+cmake_minimum_required(VERSION 3.5...3.31)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-project( cgalTest )
+project(cgalTest)
 
 add_compile_definitions(CGAL_ALWAYS_ROUND_TO_NEAREST)
 # Drop the interval-arithmetic opacify barriers: in ROUND_TO_NEAREST mode they guard against
@@ -13,57 +10,22 @@ add_compile_definitions(CGAL_ALWAYS_ROUND_TO_NEAREST)
 # (verified byte-identical across alpha_wrap / CDT / boolean) but on Wasm force a linear-memory
 # spill+reload per interval op. ~10% faster alpha_wrap. See perf/FINDINGS.md, perf/EXPERIMENTS.md.
 add_compile_definitions(CGAL_IA_RTN_NO_BARRIERS)
+# No GMP, and no Boost.Multiprecision either: exact fallbacks then use MP_Float/Quotient<MP_Float>
+# as the 5.6 build did. Boost's cpp_rational is ~2x slower in wasm (gcd normalization + soft-float
+# long double conversions) on field-type predicates, though its cpp_float makes delaunay_remesh
+# ~25% faster; it also adds ~0.7MB of wasm. Eigen's x86 SSE path uses inline asm wasm can't take,
+# and the only Eigen use here is tiny (region-growing PCA).
+add_compile_definitions(CGAL_DISABLE_GMP=1 CGAL_DO_NOT_USE_BOOST_MP EIGEN_DONT_VECTORIZE)
 
-
-# Include cgal and boost headers
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libraries/CGAL-5.6.3/include)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libraries/boost_1_72_0)
-# include libigl
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libraries/libigl-2.4.0/include)
-# include gmp
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libraries/gmp-6.2.1)
-
-set(CGAL_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/libraries/CGAL-5.6.3/include)
-set(BOOST_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/libraries/boost_1_72_0)
-
-set(LIBIGL_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/libraries/libigl-2.4.0/include)
-set(LIBIGL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libraries/libigl-2.4.0/include)
-
-include_directories(${LIBIGL_DIR})
-link_directories(${CMAKE_CURRENT_SOURCE_DIR}/libraries/boost_1_72_0/stage/lib)
-link_directories(${CMAKE_CURRENT_SOURCE_DIR}/libraries/prefix/lib)
+# Header-only deps; versions must match install_libraries.sh and the Justfile's patch-deps.
+set(LIBS ${CMAKE_CURRENT_SOURCE_DIR}/libraries)
+include_directories(${LIBS}/CGAL-6.2/include ${LIBS}/boost_1_89_0 ${LIBS}/eigen-3.4.0)
 
 add_executable(main main.cpp)
-
-SET( EIGEN3_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libraries/eigen-3.3.9)
-IF( NOT EIGEN3_INCLUDE_DIR )
-    MESSAGE( FATAL_ERROR "Please point the environment variable EIGEN3_INCLUDE_DIR to the include directory of your Eigen3 installation.")
-ENDIF()
-include_directories(${EIGEN3_INCLUDE_DIR})
-
-SET(GMPXX_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libraries/gmp-6.2.1)
-include_directories(${GMPXX_INCLUDE_DIR})
-
-SET(MPFR_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libraries/mpfr-4.2.2/src)
-include_directories(${MPFR_INCLUDE_DIR})
-
-# find_library(GMP_LIBRARIES gmp PATHS ${GMP_INCLUDE_DIR})
-# find_library(GMPXX_LIBRARIES gmpxx PATHS ${GMP_INCLUDE_DIR})
-# find_library(MPFR_LIBRARIES mpfr PATHS ${MPFR_INCLUDE_DIR})
-# target_link_libraries(main ${EIGEN3_LIBRARIES} ${GMP_LIBRARIES})
-
-# target_link_libraries(main gmp gmpxx mpfr)
-# include xatlas
-# SET(xatlas ${CMAKE_CURRENT_SOURCE_DIR}/libraries/xatlas/source/xatlas)
-# include_directories(${xatlas})
-# target_link_libraries(main PRIVATE xatlas)
-
 add_definitions(-w)
 
 set_target_properties(main
 PROPERTIES OUTPUT_NAME "index"
-CFLAGS "-O3 -msimd128 -mrelaxed-simd --llvm-features=+simd128 -msse4.2"
-CXXFLAGS "-O3 -msimd128 -mrelaxed-simd --llvm-features=+simd128 -msse4.2"
 # -fwasm-exceptions -sASSERTIONS -sNO_DISABLE_EXCEPTION_CATCHING
 LINK_FLAGS "-fwasm-exceptions -O3 -msimd128 -mrelaxed-simd --llvm-features=+simd128 -msse4.2 -s ALLOW_MEMORY_GROWTH=1 -profiling -flto --bind -s EXPORT_NAME=\"CGAL\" -s MODULARIZE=1 -s NO_EXIT_RUNTIME=1 -s NO_FILESYSTEM=1"
 )

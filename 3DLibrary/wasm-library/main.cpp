@@ -4,7 +4,6 @@
 // #define __SSE2__
 // #define __SSE4_1__
 
-#include <CGAL/Dimension.h>
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/Polygon_mesh_processing/IO/polygon_mesh_io.h>
 #include <CGAL/Polygon_mesh_processing/bbox.h>
@@ -18,32 +17,19 @@
 #include <CGAL/Polygon_mesh_processing/repair.h>
 #include <CGAL/Polygon_mesh_processing/surface_Delaunay_remeshing.h>
 #include <CGAL/Polygon_mesh_processing/triangulate_faces.h>
-#include <CGAL/Simple_cartesian.h>
 #include <CGAL/Surface_mesh.h>
-#include <CGAL/Surface_mesh_parameterization/Circular_border_parameterizer_3.h>
-#include <CGAL/Surface_mesh_parameterization/Discrete_authalic_parameterizer_3.h>
-#include <CGAL/Surface_mesh_parameterization/Error_code.h>
-#include <CGAL/Surface_mesh_parameterization/IO/File_off.h>
-#include <CGAL/Surface_mesh_parameterization/parameterize.h>
-#include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Count_ratio_stop_predicate.h>
-#include <CGAL/Surface_mesh_simplification/edge_collapse.h>
-#include <CGAL/Triangulation_3.h>
+#include <CGAL/Multipolygon_with_holes_2.h>
+#include <CGAL/alpha_wrap_2.h>
 #include <CGAL/alpha_wrap_3.h>
 #include <CGAL/boost/graph/graph_traits_Surface_mesh.h>
 #include <CGAL/boost/graph/properties.h>
 #include <CGAL/subdivision_method_3.h>
-#include <boost/foreach.hpp>
 #include <emscripten.h>
 #include <emscripten/bind.h>
-#include <fstream>
-#include <igl/PI.h>
 #include <iostream>
 #include <string>
 #include <vector>
 
-#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
-#include <CGAL/Polyhedron_3.h>
-#include <CGAL/mesh_segmentation.h>
 #include <CGAL/property_map.h>
 
 // 2D Constrained Delaunay Triangulation
@@ -64,7 +50,6 @@
 #include <map>
 
 namespace PMP = CGAL::Polygon_mesh_processing;
-namespace SMS = CGAL::Surface_mesh_simplification;
 
 // typedef CGAL::Simple_cartesian<double> Kernel;
 // /\ using this kernel causes precision issues and all kinds of bugs.
@@ -74,6 +59,20 @@ typedef CGAL::Surface_mesh<Kernel::Point_3> SurfaceMesh;
 
 template <typename T> intptr_t getVecDataPtr(std::vector<T> &vec) {
   return reinterpret_cast<intptr_t>(vec.data());
+}
+
+static std::vector<Kernel::Point_3> to_points(const std::vector<float> &flat) {
+  std::vector<Kernel::Point_3> points;
+  points.reserve(flat.size() / 3);
+  for (size_t i = 0; i + 2 < flat.size(); i += 3) {
+    points.emplace_back(flat[i], flat[i + 1], flat[i + 2]);
+  }
+  return points;
+}
+
+static auto alpha_wrap_params(bool manifold,
+                              const std::vector<Kernel::Point_3> &seeds) {
+  return CGAL::parameters::do_enforce_manifoldness(manifold).seed_points(seeds);
 }
 
 template <typename T>
@@ -276,7 +275,8 @@ public:
     return vertices;
   }
 
-  PolyMesh alphaWrap(double relative_alpha, double relative_offset) {
+  PolyMesh alphaWrap(double relative_alpha, double relative_offset,
+                     bool manifold, const std::vector<float> &seeds) {
     if (mesh.is_empty()) {
       return PolyMesh();
     }
@@ -291,9 +291,11 @@ public:
     const double offset = diag_length * relative_offset;
 
     PolyMesh result;
+    const auto seed_points = to_points(seeds);
 
     try {
-      CGAL::alpha_wrap_3(mesh, alpha, offset, result.mesh);
+      CGAL::alpha_wrap_3(mesh, alpha, offset, result.mesh,
+                         alpha_wrap_params(manifold, seed_points));
     } catch (const std::exception &e) {
       std::cout << "Error during alpha wrapping: " << e.what() << std::endl;
     }
@@ -301,7 +303,10 @@ public:
     return result;
   }
 
-  bool remesh_planar_patches(double max_angle_deg, double max_offset) {
+  // LeastSquares: refit each region's plane by PCA as it grows (CGAL < 6 behavior) instead of
+  // keeping the seed face's plane
+  template <class LeastSquares>
+  bool remesh_planar_patches_with(double max_angle_deg, double max_offset) {
     clear_error();
     if (mesh.is_empty()) {
       return true;
@@ -323,7 +328,8 @@ public:
           mesh, CGAL::make_random_access_property_map(region_ids),
           CGAL::parameters::cosine_of_maximum_angle(cos_max_angle)
               .region_primitive_map(normal_map)
-              .maximum_distance(max_offset));
+              .maximum_distance(max_offset)
+              .least_squares_fitting(LeastSquares()));
 
       // detect corner vertices on the boundary of planar regions
       std::size_t nb_corners = PMP::detect_corners_of_regions(
@@ -331,6 +337,7 @@ public:
           CGAL::make_random_access_property_map(corner_id_map),
           CGAL::parameters::cosine_of_maximum_angle(cos_max_angle)
               .maximum_distance(max_offset)
+              .least_squares_fitting(LeastSquares())
               .edge_is_constrained_map(
                   CGAL::make_random_access_property_map(ecm)));
 
@@ -361,6 +368,13 @@ public:
       return set_error(std::string("CGAL error in remesh_planar_patches: ") +
                        e.what());
     }
+  }
+
+  bool remesh_planar_patches(double max_angle_deg, double max_offset,
+                             bool least_squares) {
+    return least_squares
+               ? remesh_planar_patches_with<CGAL::Tag_true>(max_angle_deg, max_offset)
+               : remesh_planar_patches_with<CGAL::Tag_false>(max_angle_deg, max_offset);
   }
 
   void isotropic_remesh(double target_edge_length, int iterations,
@@ -403,9 +417,8 @@ public:
 };
 
 PolyMesh alphaWrapPointCloud(const std::vector<float> &vertices,
-                             double relative_alpha, double relative_offset) {
-  std::vector<Kernel::Point_3> points;
-
+                             double relative_alpha, double relative_offset,
+                             bool manifold, const std::vector<float> &seeds) {
   if (vertices.size() % 3 != 0) {
     std::cout << "Error: Point cloud data must be a flat array of "
                  "[x,y,z,x,y,z,...] coordinates"
@@ -413,16 +426,7 @@ PolyMesh alphaWrapPointCloud(const std::vector<float> &vertices,
     return PolyMesh();
   }
 
-  int num_points = vertices.size() / 3;
-  points.reserve(num_points);
-
-  for (int i = 0; i < num_points; i++) {
-    double x = static_cast<double>(vertices[i * 3]);
-    double y = static_cast<double>(vertices[i * 3 + 1]);
-    double z = static_cast<double>(vertices[i * 3 + 2]);
-    points.emplace_back(x, y, z);
-  }
-
+  const auto points = to_points(vertices);
   if (points.empty()) {
     return PolyMesh();
   }
@@ -435,9 +439,11 @@ PolyMesh alphaWrapPointCloud(const std::vector<float> &vertices,
   const double offset = diag_length * relative_offset;
 
   PolyMesh result;
+  const auto seed_points = to_points(seeds);
 
   try {
-    CGAL::alpha_wrap_3(points, alpha, offset, result.mesh);
+    CGAL::alpha_wrap_3(points, alpha, offset, result.mesh,
+                       alpha_wrap_params(manifold, seed_points));
   } catch (const std::exception &e) {
     std::cout << "Error during point cloud alpha wrapping: " << e.what()
               << std::endl;
@@ -740,6 +746,87 @@ public:
   std::vector<uint32_t> getPathLengths() const { return path_lengths_; }
 };
 
+static std::vector<Kernel::Point_2> to_points_2(const std::vector<float> &flat) {
+  std::vector<Kernel::Point_2> points;
+  points.reserve(flat.size() / 2);
+  for (size_t i = 0; i + 1 < flat.size(); i += 2) {
+    points.emplace_back(flat[i], flat[i + 1]);
+  }
+  return points;
+}
+
+// rings are emitted outer boundary first, then its holes, for each polygon
+static PolygonBoolean2DResult
+flattenMultipolygon(const CGAL::Multipolygon_with_holes_2<Kernel> &mp) {
+  std::vector<float> coords;
+  std::vector<uint32_t> lengths;
+  auto push_ring = [&](const CGAL::Polygon_2<Kernel> &ring) {
+    lengths.push_back(ring.size());
+    for (const auto &p : ring) {
+      coords.push_back(static_cast<float>(p.x()));
+      coords.push_back(static_cast<float>(p.y()));
+    }
+  };
+  for (const auto &pwh : mp.polygons_with_holes()) {
+    push_ring(pwh.outer_boundary());
+    for (const auto &hole : pwh.holes()) {
+      push_ring(hole);
+    }
+  }
+  return PolygonBoolean2DResult(std::move(coords), std::move(lengths));
+}
+
+template <class Input>
+static PolygonBoolean2DResult
+alphaWrap2DRun(const Input &input, const std::vector<Kernel::Point_2> &points,
+               double relative_alpha, double relative_offset, bool manifold,
+               const std::vector<float> &seeds) {
+  if (points.empty()) {
+    return PolygonBoolean2DResult("alpha_wrap_2d: input is empty");
+  }
+  const CGAL::Bbox_2 bbox = CGAL::bbox_2(points.begin(), points.end());
+  const double diag = std::sqrt(CGAL::square(bbox.xmax() - bbox.xmin()) +
+                                CGAL::square(bbox.ymax() - bbox.ymin()));
+  const double alpha = diag * relative_alpha;
+  const double offset = diag * relative_offset;
+  if (!(alpha > 0.) || !(offset > 0.)) {
+    return PolygonBoolean2DResult(
+        "alpha_wrap_2d: alpha and offset must be > 0 and the input must have a "
+        "non-zero extent");
+  }
+  const auto seed_points = to_points_2(seeds);
+  CGAL::Multipolygon_with_holes_2<Kernel> out;
+  try {
+    CGAL::alpha_wrap_2(input, alpha, offset, out,
+                       CGAL::parameters::do_enforce_manifoldness(manifold)
+                           .seed_points(seed_points));
+  } catch (const std::exception &e) {
+    return PolygonBoolean2DResult(std::string("CGAL error in alpha_wrap_2d: ") +
+                                  e.what());
+  }
+  return flattenMultipolygon(out);
+}
+
+// segments: flat [x0, y0, x1, y1, ...] per segment
+PolygonBoolean2DResult alphaWrap2D(const std::vector<float> &segments,
+                                   double relative_alpha, double relative_offset,
+                                   bool manifold, const std::vector<float> &seeds) {
+  const auto endpoints = to_points_2(segments);
+  std::vector<Kernel::Segment_2> segs;
+  segs.reserve(endpoints.size() / 2);
+  for (size_t i = 0; i + 1 < endpoints.size(); i += 2) {
+    segs.emplace_back(endpoints[i], endpoints[i + 1]);
+  }
+  return alphaWrap2DRun(segs, endpoints, relative_alpha, relative_offset, manifold, seeds);
+}
+
+PolygonBoolean2DResult alphaWrap2DPoints(const std::vector<float> &points,
+                                         double relative_alpha, double relative_offset,
+                                         bool manifold, const std::vector<float> &seeds) {
+  const auto pts = to_points_2(points);
+  return alphaWrap2DRun(pts, pts, relative_alpha, relative_offset, manifold, seeds);
+}
+
 static bool buildEKPolygonSet(EK_Polygon_set_2 &set,
                               const std::vector<float> &coords,
                               const std::vector<uint32_t> &subpath_lengths,
@@ -908,5 +995,9 @@ EMSCRIPTEN_BINDINGS(my_module) {
       .function("getPathLengths", &PolygonBoolean2DResult::getPathLengths);
 
   emscripten::function("pathBoolean2D", &pathBoolean2D,
+                       emscripten::allow_raw_pointers());
+  emscripten::function("alphaWrap2D", &alphaWrap2D,
+                       emscripten::allow_raw_pointers());
+  emscripten::function("alphaWrap2DPoints", &alphaWrap2DPoints,
                        emscripten::allow_raw_pointers());
 }
