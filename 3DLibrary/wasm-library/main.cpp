@@ -146,6 +146,16 @@ private:
     }
   }
 
+  // A zero-area face (boolean output has them) has no normal, so anything classifying edges
+  // or faces by angle misreads it: isotropic remeshing tags its edges sharp and can then only
+  // subdivide it into a chain of more of them.
+  void remove_degenerate_faces() {
+    PMP::remove_almost_degenerate_faces(
+        mesh, CGAL::parameters::cap_threshold(std::cos(179.9 * CGAL_PI / 180.0))
+                  .needle_threshold(1e5));
+    mesh.collect_garbage();
+  }
+
 public:
   SurfaceMesh mesh;
   Kernel::Point_3 sdf_p = Kernel::Point_3(0, 4, 0);
@@ -312,6 +322,7 @@ public:
       return true;
     }
     try {
+      remove_degenerate_faces();
       std::vector<std::size_t> region_ids(num_faces(mesh));
       // corner status of vertices
       std::vector<std::size_t> corner_id_map(num_vertices(mesh), -1);
@@ -384,6 +395,8 @@ public:
       return;
     }
 
+    remove_degenerate_faces();
+
     tag_edges(protect_borders, auto_sharp_edges, sharp_angle_threshold_degrees);
 
     // CGAL warns to pre-split long preserved edges to avoid infinite loops in
@@ -404,6 +417,7 @@ public:
     if (mesh.is_empty())
       return;
 
+    remove_degenerate_faces();
     auto outmesh = PMP::surface_Delaunay_remeshing(
         mesh, CGAL::parameters::protect_constraints(auto_sharp_edges)
                   .mesh_edge_size(target_edge_length)
