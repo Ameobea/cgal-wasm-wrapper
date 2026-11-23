@@ -1,10 +1,7 @@
 patch-deps:
   #!/bin/bash
   set -e
-  CGAL=./libraries/CGAL-6.2/include/CGAL
-  python3 patch-fpu.py $CGAL/FPU.h
-  python3 patch-remesh-planar-patches.py $CGAL/Polygon_mesh_processing/remesh_planar_patches.h
-  python3 patch-aabb-distance-tie.py $CGAL/AABB_traits_3.h
+  python3 apply-patches.py
 
 build:
   #!/bin/bash
@@ -15,7 +12,15 @@ build:
   if ! tail -n 5 ./build/index.js | grep -q "export { CGAL }"; then
     echo "export { CGAL }" >> ./build/index.js
   fi
-  wasm-opt build/index.wasm -g -c -O4 --enable-exception-handling --enable-bulk-memory --enable-simd --enable-relaxed-simd --enable-nontrapping-float-to-int --precompute-propagate --strip-dwarf -o build/index.wasm
+  wasm-opt build/index.wasm -g --strip-dwarf -O4 --enable-exception-handling --enable-bulk-memory --enable-simd --enable-relaxed-simd --enable-nontrapping-float-to-int --precompute-propagate -o build/index.wasm
 
 install:
   cp build/index.* ~/dream/src/viz/wasm/cgal/
+  # Vite ignores src/viz/wasm; clear its cached JS after replacing the JS/Wasm pair.
+  if [ -f ~/dream/vite.config.js ]; then touch ~/dream/vite.config.js; fi
+
+check-patches:
+  python3 apply-patches.py --check
+
+test-patches:
+  python3 patches/test_apply.py

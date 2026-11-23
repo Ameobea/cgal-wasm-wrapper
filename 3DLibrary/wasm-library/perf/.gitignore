@@ -1,0 +1,9 @@
+# build artifacts
+native_bench_*
+kp_*
+nb_*.js
+nb_*.wasm
+mbi.js
+mbi.wasm
+*.o
+results/

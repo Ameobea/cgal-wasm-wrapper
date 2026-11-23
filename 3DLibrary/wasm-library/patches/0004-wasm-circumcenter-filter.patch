@@ -1,0 +1,106 @@
+--- a/include/CGAL/Alpha_wrap_3/internal/geometry_utils.h
++++ b/include/CGAL/Alpha_wrap_3/internal/geometry_utils.h
+@@ -40,6 +40,79 @@
+   }
+ };
+ 
++#if defined(__wasm__) && defined(CGAL_ALWAYS_ROUND_TO_NEAREST) && defined(CGAL_AW3_WASM_CIRCUMCENTER_FILTER)
++#if defined(__FAST_MATH__)
++#error The circumcenter filter requires strict floating-point arithmetic
++#endif
++// Round-to-nearest filter for CGAL's seven-point predicate.
++// The polynomial and conservative error-bound argument are in FINDINGS.md of the
++// cgal-wasm patch queue this comes from.
++// m evaluates the absolute expression; the final certificate covers rounding in
++// both v and m. These are not interval endpoints and need no per-operation ULP bump.
++struct AW_bound {
++  double v, m;
++  explicit AW_bound(double x = 0) : v(x), m(std::abs(x)) {}
++  AW_bound(double x, double magnitude) : v(x), m(magnitude) {}
++  friend AW_bound operator+(AW_bound a, AW_bound b) { return {a.v+b.v, a.m+b.m}; }
++  friend AW_bound operator-(AW_bound a, AW_bound b) { return {a.v-b.v, a.m+b.m}; }
++  friend AW_bound operator*(AW_bound a, AW_bound b) { return {a.v*b.v, a.m*b.m}; }
++};
++struct AW_vec {
++  AW_bound x,y,z;
++  friend AW_vec operator-(AW_vec a, AW_vec b) { return {a.x-b.x,a.y-b.y,a.z-b.z}; }
++  friend AW_vec operator+(AW_vec a, AW_vec b) { return {a.x+b.x,a.y+b.y,a.z+b.z}; }
++  friend AW_vec operator*(AW_bound a, AW_vec b) { return {a*b.x,a*b.y,a*b.z}; }
++};
++inline AW_bound aw_dot(AW_vec a, AW_vec b) { return a.x*b.x+a.y*b.y+a.z*b.z; }
++inline AW_vec aw_cross(AW_vec a, AW_vec b) { return {a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x}; }
++#ifdef AW_COUNT
++inline unsigned long long aw_calls=0, aw_hits=0;
++#endif
++
++template<class Base>
++struct AW_circumcenter_filter : Base {
++  template<class Point>
++  Orientation operator()(const Point& p, const Point& q, const Point& r,
++                         const Point& a, const Point& b, const Point& c, const Point& d) const {
++#ifdef AW_COUNT
++    ++aw_calls;
++#endif
++    if constexpr(std::is_same<typename Point::R::FT, double>::value) {
++      const Point* pts[]={&p,&q,&r,&a,&b,&c,&d};
++      AW_vec v[7];
++      bool safe=true;
++      for(int i=0;i<7;++i) {
++        double xyz[]={pts[i]->x(),pts[i]->y(),pts[i]->z()};
++        for(double x:xyz) {
++          double ax=std::abs(x);
++          safe &= (ax==0 || (ax>=0x1p-100 && ax<=0x1p100));
++        }
++        v[i]={AW_bound(xyz[0]),AW_bound(xyz[1]),AW_bound(xyz[2])};
++      }
++      if(safe) {
++        const AW_vec u=v[4]-v[3], w=v[5]-v[3], t=v[6]-v[3];
++        const AW_vec wx=aw_cross(w,t), tx=aw_cross(t,u), ux=aw_cross(u,w);
++        const AW_bound den=aw_dot(u,wx);
++        const AW_vec num=aw_dot(u,u)*wx+aw_dot(w,w)*tx+aw_dot(t,t)*ux;
++        const AW_vec normal=aw_cross(v[1]-v[0],v[2]-v[0]);
++        const AW_bound side=aw_dot(normal,num+(AW_bound(2)*den)*(v[3]-v[0]));
++        // Each expanded monomial has at most 20 rounding factors. This
++        // deliberately loose factor exceeds gamma_20 / (1-u)^20.
++        constexpr double error_factor = 0x1p-40;
++        if(std::abs(den.v)>error_factor*den.m && std::abs(side.v)>error_factor*side.m) {
++#ifdef AW_COUNT
++          ++aw_hits;
++#endif
++          return (den.v>0)==(side.v>0) ? POSITIVE : NEGATIVE;
++        }
++      }
++    }
++    return Base::operator()(p,q,r,a,b,c,d);
++  }
++};
++
++#endif
++
+ template <typename Tr>
+ bool
+ less_squared_radius_of_min_empty_sphere(typename Tr::Geom_traits::FT sq_alpha,
+@@ -59,7 +132,11 @@
+                                                          Orientation_of_circumcenter<Approximate_kernel>,
+                                                          C2E, C2A>;
+ 
++#if defined(__wasm__) && defined(CGAL_ALWAYS_ROUND_TO_NEAREST) && defined(CGAL_AW3_WASM_CIRCUMCENTER_FILTER)
++  AW_circumcenter_filter<Orientation_of_circumcenter> orientation_of_circumcenter;
++#else
+   Orientation_of_circumcenter orientation_of_circumcenter;
++#endif
+ 
+ #ifdef CGAL_AW3_DEBUG_TRAVERSABILITY
+   std::cout << "Checking for traversability of facet" << std::endl;
+@@ -186,7 +263,11 @@
+                                                          Orientation_of_circumcenter<Approximate_kernel>,
+                                                          C2E, C2A>;
+ 
++#if defined(__wasm__) && defined(CGAL_ALWAYS_ROUND_TO_NEAREST) && defined(CGAL_AW3_WASM_CIRCUMCENTER_FILTER)
++  AW_circumcenter_filter<Orientation_of_circumcenter> orientation_of_circumcenter;
++#else
+   Orientation_of_circumcenter orientation_of_circumcenter;
++#endif
+ 
+   auto squared_radius = tr.geom_traits().compute_squared_radius_3_object();
+ 

@@ -1,0 +1,86 @@
+--- a/include/CGAL/FPU.h
++++ b/include/CGAL/FPU.h
+@@ -148,7 +148,7 @@
+   // etc.
+   // This seems to produce code that is ok (not optimal but better than
+   // volatile). In case of trouble, use volatile instead.
+-# ifdef CGAL_HAS_SSE2
++# if defined(CGAL_HAS_SSE2) && !defined(__wasm__)
+   asm volatile ("" : "+x"(x) );
+ # elif (defined __VFP_FP__ && !defined __SOFTFP__) || defined __aarch64__
+   // ARM
+@@ -215,7 +215,7 @@
+   return IA_opacify (x);
+ #else
+ #if defined __GNUG__
+-#  ifdef CGAL_HAS_SSE2
++#  if defined(CGAL_HAS_SSE2) && !defined(__wasm__)
+   // For an explanation of volatile:
+   // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=56027
+   asm volatile ("" : "+mx"(x) );
+@@ -292,7 +292,16 @@
+ // In case one does not care about such "extreme" situations, one can
+ // set CGAL_IA_NO_X86_OVER_UNDER_FLOW_PROTECT to pretend there is no excess
+ // precision.
+-#if defined CGAL_FPU_HAS_EXCESS_PRECISION
++// In CGAL_ALWAYS_ROUND_TO_NEAREST mode the runtime and compile-time rounding modes are
++// both round-to-nearest, and the directed widening that makes intervals valid is applied
++// explicitly and asymmetrically by nextUp() (which is itself a bit-cast optimization
++// barrier). The opacify/stop-cprop barriers exist solely to keep the compiler from folding
++// or migrating ops across a hardware directed-rounding switch that never happens here, so
++// they are correctness-neutral in this mode — and on Wasm IA_opacify forces a linear-memory
++// spill+reload per interval op. CGAL_IA_RTN_NO_BARRIERS opts into dropping them.
++#if defined(CGAL_ALWAYS_ROUND_TO_NEAREST) && defined(CGAL_IA_RTN_NO_BARRIERS)
++#  define CGAL_IA_FORCE_TO_DOUBLE(x) (x)
++#elif defined CGAL_FPU_HAS_EXCESS_PRECISION
+ #  define CGAL_IA_FORCE_TO_DOUBLE(x) CGAL::IA_force_to_double(x)
+ #elif 1
+ // LLVM doesn't have -frounding-math so needs extra protection.
+@@ -308,7 +317,9 @@
+ 
+ // We sometimes need to stop constant propagation,
+ // because operations are done with a wrong rounding mode at compile time.
+-#ifndef CGAL_IA_DONT_STOP_CONSTANT_PROPAGATION
++#if defined(CGAL_ALWAYS_ROUND_TO_NEAREST) && defined(CGAL_IA_RTN_NO_BARRIERS)
++#  define CGAL_IA_STOP_CPROP(x)    (x)
++#elif !defined(CGAL_IA_DONT_STOP_CONSTANT_PROPAGATION)
+ #  define CGAL_IA_STOP_CPROP(x)    CGAL::IA_opacify(x)
+ #else
+ #  define CGAL_IA_STOP_CPROP(x)    (x)
+@@ -344,13 +355,35 @@
+ // With GCC, we can do slightly better : test with __builtin_constant_p()
+ // that both arguments are constant before stopping one of them.
+ // Use inline functions instead ?
++static inline int64_t as_i64(double x) {
++  int64_t i;
++  std::memcpy(&i, &x, sizeof i);
++  return i;
++}
++static inline double as_f64(int64_t i) {
++  double x;
++  std::memcpy(&x, &i, sizeof x);
++  return x;
++}
++
++// nextafter(x, +inf) for finite x: +1 ulp on the bit pattern for x >= +0, -1 for x < 0, with
++// -0 mapped to the smallest positive denormal. Infinities and NaNs are assumed never to occur.
++static inline double nextUp(double x) {
++  int64_t u = as_i64(x);
++  if (__builtin_expect((u << 1) == 0, 0)) {
++    return as_f64(0x0000000000000001LL);
++  }
++  const int64_t sign = u < 0;
++  return as_f64(u + (1 - sign * 2));
++}
++
+ inline double IA_up(double d)
+ {
+ #ifdef CGAL_ALWAYS_ROUND_TO_NEAREST
+   // In round-to-nearest mode we find the successor instead.
+   // This preserves the interval invariants, but is more
+   // expensive and conservative.
+-  return nextafter(d, std::numeric_limits<double>::infinity());
++  return nextUp(d);
+ #else
+   // In round-upward mode we can rely on the hardware
+   // to do the job.

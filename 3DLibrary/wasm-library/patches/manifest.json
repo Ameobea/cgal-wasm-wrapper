@@ -1,0 +1,69 @@
+{
+  "cgal_version": "6.2",
+  "archive": {
+    "name": "CGAL-6.2.tar.xz",
+    "sha256": "fbc32816745e871a5cbdeb6245317e9dbf10ae1a957b0ab1edb00b4fde00ba8d"
+  },
+  "patches": [
+    {
+      "file": "0001-wasm-fpu.patch",
+      "sha256": "0851d2e111271c3ca044978f4687b72d77864b6f665c89de6053417ad7e56d45",
+      "targets": {
+        "include/CGAL/FPU.h": {
+          "before": "aaa31d4f5b48cd8b2400c154b0cc16ed9d082825670651d84bf49a2f4997978a",
+          "after": "eaee0780579d5549d9024534e1fa02c142a5eba69e7ac2ee50690ab7154b77b3"
+        }
+      }
+    },
+    {
+      "file": "0002-remesh-planar-patches.patch",
+      "sha256": "ba93f88dddacda305d7e996084ac0de7da15dfc18ec0ba98ae431648f96ec20f",
+      "targets": {
+        "include/CGAL/Polygon_mesh_processing/remesh_planar_patches.h": {
+          "before": "16eb8ffd80a81bdf970630c645a32a3accd6ac78837fb9cd1c361b8d6368e995",
+          "after": "f2845b3eb333f2022e4caad8b1641aa4315af2928ba20b47fcb391f53d194e82"
+        }
+      }
+    },
+    {
+      "file": "0003-aabb-distance-tie.patch",
+      "sha256": "e2e75c6833a878c245bfa2ded2d11b773508359b876cea897fe1a7fd66374a49",
+      "targets": {
+        "include/CGAL/AABB_traits_3.h": {
+          "before": "b39aea71572326590b890b1a6934156262efa9036a363e0349f13e2f8447ccec",
+          "after": "c26ed9d44c02252a5c7f50f78a24266565ea3fe8f65c331054ee65a3d84b76bd"
+        }
+      }
+    },
+    {
+      "file": "0004-wasm-circumcenter-filter.patch",
+      "sha256": "915fd02f14b2b4d32a612af37106cf0450a760d3fbc78142cae5c870094d9bfe",
+      "targets": {
+        "include/CGAL/Alpha_wrap_3/internal/geometry_utils.h": {
+          "before": "eaaefd0ab65fe24957b3c8d589e3f69407dea0addd20e69ff00eff8422aab6f0",
+          "after": "184dcb0c54ef920602987731f012c4618910b1fde3d2313ae2224f8ceb0d28ee"
+        }
+      }
+    },
+    {
+      "file": "0005-compare-angle-no-uncertain-branch.patch",
+      "sha256": "b5b1910589e36010c6db0eca06aa17bdbc741cc07f353e51b0aea2eeea1e202c",
+      "targets": {
+        "include/CGAL/Kernel/function_objects.h": {
+          "before": "5ddef5a4ff44efdd04067c99b01cf095146037280f0c8462103bb4e546d149da",
+          "after": "8852f2a79e4b512608278d4a0186a62b41445a40c3cc3a8753af342b15f04e99"
+        }
+      }
+    },
+    {
+      "file": "0006-point-plane-distance-no-point-on-plane.patch",
+      "sha256": "61dfaaf3dd2b45377fe185b1056291b4912f62319d3d5e98fc71b85beee79552",
+      "targets": {
+        "include/CGAL/Distance_3/Point_3_Plane_3.h": {
+          "before": "6380e12ca7c765d9d931f721c6fca61e1434a0853cf6069036bad92973ed81a0",
+          "after": "4150c159037c15462828cdac56979a428a2c5afcc3272eae9e935ff187403abc"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+--- a/include/CGAL/Kernel/function_objects.h
++++ b/include/CGAL/Kernel/function_objects.h
+@@ -274,24 +274,11 @@
+ 
+       typename K::FT sc_prod = scalar_product(ba, bc);
+ 
+-      if (sc_prod >= 0)
+-      {
+-        if (cosine >= 0)
+-          return CGAL::compare(CGAL::square(cosine)
+-                                * sq_length(ba)*sq_length(bc),
+-                               CGAL::square(sc_prod));
+-        else
+-          return SMALLER;
+-      }
+-      else
+-      {
+-        if (cosine >= 0)
+-          return LARGER;
+-        else
+-          return CGAL::compare(CGAL::square(sc_prod),
+-                               CGAL::square(cosine)
+-                                * sq_length(ba)*sq_length(bc));
+-      }
++      // cos(angle) = sc_prod / sqrt(sq_length(ba)*sq_length(bc)). Comparing sign-preserving
++      // squares needs no branch on the sign of sc_prod or cosine; such a branch converts an
++      // Uncertain<bool> in the interval filter and throws for exactly perpendicular vectors.
++      return CGAL::compare(cosine * CGAL::abs(cosine) * sq_length(ba) * sq_length(bc),
++                           sc_prod * CGAL::abs(sc_prod));
+     }
+ 
+     Comparison_result
+@@ -308,24 +295,10 @@
+ 
+       typename K::FT sc_prod = scalar_product(n1, n2);
+ 
+-      if (sc_prod >= 0)
+-      {
+-        if (cosine >= 0)
+-          return CGAL::compare(CGAL::square(cosine)
+-                                * sq_length(n1)*sq_length(n2),
+-                               CGAL::square(sc_prod));
+-        else
+-          return SMALLER;
+-      }
+-      else
+-      {
+-        if (cosine >= 0)
+-          return LARGER;
+-        else
+-          return CGAL::compare(CGAL::square(sc_prod),
+-                               CGAL::square(cosine)
+-                                * sq_length(n1)*sq_length(n2));
+-      }
++      // Same sign-preserving-square comparison as above: exactly perpendicular face normals
++      // (any box-like mesh) would otherwise throw in the interval filter on every test.
++      return CGAL::compare(cosine * CGAL::abs(cosine) * sq_length(n1) * sq_length(n2),
++                           sc_prod * CGAL::abs(sc_prod));
+     }
+   };
+ 

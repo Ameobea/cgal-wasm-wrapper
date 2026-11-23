@@ -1,0 +1,15 @@
+--- a/include/CGAL/AABB_traits_3.h
++++ b/include/CGAL/AABB_traits_3.h
+@@ -334,6 +334,12 @@
+       {
+         CGAL_BRANCH_PROFILER_BRANCH_1(tmp);
+ 
++        // p coincides with bound: no box can be strictly closer, so the answer is exact here
++        if (ssr == 0) {
++          const bool inside = scx >= bxmin && scx <= bxmax && scy >= bymin && scy <= bymax &&
++                              scz >= bzmin && scz <= bzmax;
++          return inside ? CGAL::EQUAL : CGAL::LARGER;
++        }
+         if ((ssr < 1.11261183279326254436e-293) || (ssr > 2.80889552322236673473e+306)) {
+           CGAL_BRANCH_PROFILER_BRANCH_2(tmp);
+           return Compare_distance_getter_3<GeomTraits, true, false>::compare_distance_object()(p, b, bound);

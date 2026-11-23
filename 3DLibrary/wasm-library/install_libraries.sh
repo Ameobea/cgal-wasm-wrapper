@@ -1,6 +1,6 @@
 #!/bin/bash
-# Downloads + extracts the header-only deps into libraries/. Versions must match CMakeLists.txt
-# and the Justfile's patch-deps recipe.
+# Downloads + extracts the header-only deps into libraries/. Versions must match CMakeLists.txt,
+# patches/manifest.json, and the default root in apply-patches.py.
 set -e
 mkdir -p libraries/downloads
 

@@ -1,0 +1,17 @@
+--- a/include/CGAL/Distance_3/Point_3_Plane_3.h
++++ b/include/CGAL/Distance_3/Point_3_Plane_3.h
+@@ -55,7 +55,13 @@
+                          const K& k,
+                          const typename K::FT& d2)
+ {
+-  return ::CGAL::compare(squared_distance(pt, plane, k), d2);
++  // Plane equation, cross-multiplied, instead of squared_distance(): that constructs
++  // plane.point(), whose largest-coefficient selection converts Uncertain<bool>s and throws
++  // in the interval filter for near-axis-aligned planes (every vertex test on CSG output).
++  typedef typename K::FT FT;
++  const FT num = plane.a()*pt.x() + plane.b()*pt.y() + plane.c()*pt.z() + plane.d();
++  const FT den = CGAL::square(plane.a()) + CGAL::square(plane.b()) + CGAL::square(plane.c());
++  return ::CGAL::compare(CGAL::square(num), d2 * den);
+ }
+ 
+ template <class K>
