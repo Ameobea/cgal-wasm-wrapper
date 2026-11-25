@@ -110,6 +110,14 @@ private:
 
   void clear_error() { last_error_.clear(); }
 
+  // Attribute seams and other edges the caller needs kept as edges of the output.
+  SurfaceMesh::Property_map<edge_descriptor, bool> feature_emap;
+
+  void ensure_feature_map() {
+    feature_emap =
+        mesh.add_property_map<edge_descriptor, bool>("e:is_feature", false).first;
+  }
+
   void ensure_constrained_map() {
     if (!constrained_edge_map_initialized) {
       constrained_emap = mesh.add_property_map<edge_descriptor, bool>(
@@ -150,10 +158,49 @@ private:
   // or faces by angle misreads it: isotropic remeshing tags its edges sharp and can then only
   // subdivide it into a chain of more of them.
   void remove_degenerate_faces() {
+    ensure_feature_map();
     PMP::remove_almost_degenerate_faces(
         mesh, CGAL::parameters::cap_threshold(std::cos(179.9 * CGAL_PI / 180.0))
-                  .needle_threshold(1e5));
+                  .needle_threshold(1e5)
+                  .edge_is_constrained_map(feature_emap));
     mesh.collect_garbage();
+  }
+
+  // Splits each region into its components connected across non-feature edges, so feature
+  // edges always end up on region boundaries. Returns the new region count.
+  std::size_t split_regions_at_features(
+      std::vector<std::size_t> &region_ids,
+      boost::vector_property_map<CGAL::Epick::Vector_3> &normal_map) {
+    const std::size_t unset = -1;
+    std::vector<std::size_t> out(region_ids.size(), unset);
+    boost::vector_property_map<CGAL::Epick::Vector_3> out_normals;
+    std::size_t count = 0;
+    std::vector<face_descriptor> stack;
+    for (auto seed : mesh.faces()) {
+      if (out[seed] != unset) {
+        continue;
+      }
+      out_normals[count] = normal_map[region_ids[seed]];
+      out[seed] = count;
+      stack.push_back(seed);
+      while (!stack.empty()) {
+        auto f = stack.back();
+        stack.pop_back();
+        for (auto h : halfedges_around_face(halfedge(f, mesh), mesh)) {
+          auto g = face(opposite(h, mesh), mesh);
+          if (g == SurfaceMesh::null_face() || out[g] != unset ||
+              region_ids[g] != region_ids[f] || feature_emap[edge(h, mesh)]) {
+            continue;
+          }
+          out[g] = count;
+          stack.push_back(g);
+        }
+      }
+      count += 1;
+    }
+    region_ids = std::move(out);
+    normal_map = out_normals;
+    return count;
   }
 
 public:
@@ -214,6 +261,18 @@ public:
     }
 
     return true;
+  }
+
+  // `pairs` holds two vertex indices per edge, in `buildFromBuffers` numbering.
+  void set_feature_edges(const std::vector<uint32_t> &pairs) {
+    ensure_feature_map();
+    for (size_t i = 0; i + 1 < pairs.size(); i += 2) {
+      auto h = mesh.halfedge(SurfaceMesh::Vertex_index(pairs[i]),
+                             SurfaceMesh::Vertex_index(pairs[i + 1]));
+      if (h != SurfaceMesh::null_halfedge()) {
+        feature_emap[mesh.edge(h)] = true;
+      }
+    }
   }
 
   std::string getLastError() const { return last_error_; }
@@ -341,6 +400,7 @@ public:
               .region_primitive_map(normal_map)
               .maximum_distance(max_offset)
               .least_squares_fitting(LeastSquares()));
+      nb_regions = split_regions_at_features(region_ids, normal_map);
 
       // detect corner vertices on the boundary of planar regions
       std::size_t nb_corners = PMP::detect_corners_of_regions(
@@ -398,6 +458,11 @@ public:
     remove_degenerate_faces();
 
     tag_edges(protect_borders, auto_sharp_edges, sharp_angle_threshold_degrees);
+    for (auto e : edges(mesh)) {
+      if (feature_emap[e]) {
+        constrained_emap[e] = true;
+      }
+    }
 
     // CGAL warns to pre-split long preserved edges to avoid infinite loops in
     // the algorithm
@@ -955,6 +1020,7 @@ EMSCRIPTEN_BINDINGS(my_module) {
       .constructor<>()
       .function("buildFromBuffers", &PolyMesh::buildFromBuffers,
                 emscripten::allow_raw_pointers())
+      .function("set_feature_edges", &PolyMesh::set_feature_edges)
       .function("getIndices", &PolyMesh::getIndices,
                 emscripten::allow_raw_pointers())
       .function("getVertices", &PolyMesh::getVertices,
